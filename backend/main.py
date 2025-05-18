@@ -19,13 +19,30 @@ load_dotenv()
 # inisialisasi aplikasi
 app = FastAPI(title="AI Portfolio Backend")
 
-# konfigurasi cors yang lebih spesifik
-frontend_url = os.getenv("FRONTEND_URL", "https://portofolio-danen-frontend.vercel.app")
-allowed_origins = [
-    frontend_url,
-    "http://localhost:3000",  # development
-    "https://portofolio-danen-frontend.vercel.app",  # produksi
+frontend_url = os.getenv("FRONTEND_URL", "https://frontend-portofolio-danen.vercel.app")
+
+# Split multiple URLs jika frontend_url berisi koma
+allowed_origins = []
+if frontend_url:
+    print(f"Frontend URL from env: {frontend_url}")
+    for url in frontend_url.split(','):
+        url = url.strip()
+        allowed_origins.append(url)
+        print(f"Added origin: {url}")
+
+additional_origins = [
+    "http://localhost:3000",
+    "https://frontend-portofolio-danen.vercel.app",
+    "https://frontend-portofolio-danen-git-master-danenftyessirs-projects.vercel.app",
+    "https://frontend-portofolio-danen-419wreixy-danenftyessirs-projects.vercel.app"
 ]
+
+for origin in additional_origins:
+    if origin not in allowed_origins:
+        allowed_origins.append(origin)
+        print(f"Added additional origin: {origin}")
+
+print(f"Final allowed origins: {allowed_origins}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,7 +51,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # model untuk request
 class QuestionRequest(BaseModel):
     question: str
