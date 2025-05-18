@@ -8,6 +8,8 @@ import json
 import requests
 import random
 import re
+from typing import List, Dict, Any, Optional
+import difflib
 
 # setup logging 
 logging.basicConfig(level=logging.INFO)
@@ -21,15 +23,15 @@ app = FastAPI(title="AI Portfolio Backend")
 
 frontend_url = os.getenv("FRONTEND_URL", "https://frontend-portofolio-danen.vercel.app")
 
-# Split dan bersihkan URLs
+# split dan bersihkan urls
 allowed_origins = []
 if frontend_url:
     for url in frontend_url.split(','):
-        url = url.strip()  # Hapus whitespace
-        if url:  # Hanya tambahkan jika tidak kosong
+        url = url.strip()
+        if url:
             allowed_origins.append(url)
 
-# Tambahkan URL tambahan yang diperlukan (tanpa semicolon)
+# tambahkan url tambahan yang diperlukan
 additional_origins = [
     "http://localhost:3000",
     "https://frontend-portofolio-danen.vercel.app",
@@ -41,7 +43,7 @@ for origin in additional_origins:
     if origin not in allowed_origins:
         allowed_origins.append(origin)
 
-# Tampilkan semua origins yang diizinkan
+# tampilkan semua origins yang diizinkan
 print(f"Final allowed origins: {allowed_origins}")
 
 app.add_middleware(
@@ -87,11 +89,16 @@ user_profile = {
         "Git": "Version control untuk kolaborasi dan tracking proyek",
         "Figma": "Untuk wireframing dan design",
     },
-    "hobi": ["Membaca buku bergenre horror", "Traveling ke destinasi lokal", "Jelajah streetfood"],
+    "hobi": ["Membaca buku novel", "Traveling ke destinasi lokal", "Penggemar street food"],
     "hobi_detail": {
-        "Membaca": "Buku favorit termasuk 'IT' dan karya-karya Stephen King",
+        "Membaca": "Buku favorit termasuk 'Omniscient Reader Viewpoint' dan novel fantasi",
         "Traveling": "Sudah mengunjungi 4 provinsi di Indonesia dan berencana menambah lagi",
-        "Fotografi": "Memiliki akun Instagram khusus untuk foto-foto traveling"
+        "Street Food": "Penggemar berat street food Indonesia seperti martabak, sate, dan gorengan"
+    },
+    "makanan_favorit": {
+        "street_food": ["Martabak manis", "Sate ayam", "Gorengan", "Ketoprak", "Batagor"],
+        "restoran": ["Nasi padang", "Soto betawi", "Bakso"],
+        "camilan": ["Keripik pisang", "Basreng", "Cimol"]
     },
     "proyek": [
         "Algoritma Pencarian Little Alchemy 2 - Implementasi BFS, DFS, dan Bidirectional Search",
@@ -132,9 +139,10 @@ user_profile = {
     ],
     "moto": "Menuju tak terbatas dan melampauinya",
     "lagu_favorit": {
-        "Without You": "Air Supply",
-        "Sekali Ini Saja": "Glenn Fredly",
-        "Lagu Oldies": "Bee Gees, Westlife, Backstreet Boys"
+        "Indonesia": ["Sekali Ini Saja - Glenn Fredly", "Separuh Aku - Noah", "Bukan Rayuan Gombal - Judika"],
+        "Barat": ["Without You - Air Supply", "My Heart Will Go On - Celine Dion", "Perfect - Ed Sheeran"],
+        "Genre": ["Pop 90an", "Ballad", "Oldies"],
+        "Untuk_Coding": ["Lagu instrumental", "Lo-fi beats", "Soundtrack film"]
     },
     "kuliah": {
         "mata_kuliah_favorit": "Matematika",
@@ -163,79 +171,155 @@ user_profile = {
     }
 }
 
-# fungsi untuk mengkategorikan pertanyaan
+# daftar keyword untuk pengenalan kategori
+category_keywords = {
+    "lagu_favorit": [
+        "lagu", "musik", "dengerin", "dengarkan", "nyanyi", "penyanyi", "band", "playlist",
+        "genre", "album", "konser", "artist", "artis", "musisi", "spotify", "instrumental", 
+        "mendengarkan", "lagu favorit", "lagu kesukaan", "musik favorit", "enak didengerin"
+    ],
+    "makanan_favorit": [
+        "makanan", "makan", "masak", "sarapan", "makan siang", "makan malam", "kuliner", 
+        "masakan", "jajan", "ngemil", "makanan favorit", "masakan favorit", "kuliner favorit",
+        "street food", "makanan jalanan", "enak", "lezat", "gurih", "manis", "pedas", "snack",
+        "hidangan", "menu", "lapar", "kenyang", "nyemil", "nongkrong"
+    ],
+    "hobi": [
+        "hobi", "suka", "waktu luang", "kegiatan", "aktivitas", "senang", "menghabiskan waktu",
+        "passion", "interest", "mengisi waktu", "kesenangan", "leisure", "weekend", "libur"
+    ],
+    "keahlian": [
+        "keahlian", "skill", "kemampuan", "ahli", "bisa apa", "bisa apa saja", "jago", 
+        "expert", "menguasai", "expertise", "kompetensi", "kapabilitas", "spesialisasi", 
+        "teknis", "technical", "hard skill"
+    ],
+    "proyek": [
+        "proyek", "project", "karya", "portfolio", "aplikasi", "buat apa", "telah dibuat", 
+        "terbaik", "unggulan", "kerjaan", "hasil", "pencapaian", "showcase", "demo", "showcase"
+    ],
+    # ...kategori lainnya bisa ditambahkan di sini
+}
+
+# fungsi untuk deteksi typo dan perbaikan kata
+def fuzzy_match(word: str, word_list: List[str], threshold: float = 0.75) -> Optional[str]:
+    matches = difflib.get_close_matches(word.lower(), word_list, n=1, cutoff=threshold)
+    return matches[0] if matches else None
+
+# preprocessing pertanyaan
+def preprocess_question(question: str) -> str:
+    # lowercase
+    question = question.lower()
+    # hapus karakter khusus
+    question = re.sub(r'[^\w\s]', ' ', question)
+    # normalisasi spasi
+    question = re.sub(r'\s+', ' ', question).strip()
+    return question
+
+# fungsi untuk mengkategorikan pertanyaan yang lebih robust
 def categorize_question(question: str) -> str:
-    question_lower = question.lower()
+    original_question = question
+    question = preprocess_question(question)
+    question_words = question.split()
     
-    # kategori pertanyaan personal yang perlu dialihkan
-    if any(word in question_lower for word in ["pacar", "jodoh", "pacaran", "pasangan", "gebetan", "nikah", "menikah", "single", "lajang", "status hubungan"]):
-        return "personal_relationship"
-    elif any(word in question_lower for word in ["gaji", "salary", "penghasilan", "bayaran", "uang", "kekayaan", "sebulan"]):
-        return "personal_financial"
-    elif any(word in question_lower for word in ["alamat rumah", "tinggal dimana", "alamat lengkap", "nomor", "kontak", "pribadi"]):
-        return "personal_contact"
-    elif any(word in question_lower for word in ["umur", "usia", "tanggal lahir", "kapan lahir", "kelahiran"]):
-        return "personal_age"
-    elif any(word in question_lower for word in ["agama", "kepercayaan", "tuhan", "beribadah"]):
-        return "personal_religion"
+    # pengecekan kategori personal dulu
+    personal_checks = [
+        (["pacar", "jodoh", "pacaran", "pasangan", "gebetan", "nikah", "menikah", "single", "lajang", "status hubungan"], "personal_relationship"),
+        (["gaji", "salary", "penghasilan", "bayaran", "uang", "kekayaan", "sebulan", "pendapatan"], "personal_financial"),
+        (["alamat rumah", "tinggal dimana", "alamat lengkap", "nomor", "kontak", "pribadi", "telepon", "hp"], "personal_contact"),
+        (["umur", "usia", "tanggal lahir", "kapan lahir", "kelahiran", "berapa tahun"], "personal_age"),
+        (["agama", "kepercayaan", "tuhan", "beribadah", "keyakinan", "ibadah"], "personal_religion")
+    ]
+    
+    for keywords, category in personal_checks:
+        if any(keyword in question for keyword in keywords):
+            return category
+    
+    # cek untuk kategori spesifik dengan fuzzy matching
+    word_category_counts = {}
+    
+    # hitung berapa kata dari pertanyaan yang cocok dengan setiap kategori
+    for category, keywords in category_keywords.items():
+        matches = 0
+        matched_words = []
         
-    # kategori umum
-    elif any(phrase in question_lower for phrase in ["lagu kesukaan", "lagu favorit", "musik favorit", "musik kesukaan"]) or any(word in question_lower for word in ["lagu", "musik", "dengerin", "dengarkan", "dengerin", "playlist"]):
-        return "lagu_favorit"
-    elif any(word in question_lower for word in ["keahlian", "skill", "kemampuan", "ahli", "bisa apa", "bisa apa saja", "jago"]):
-        return "keahlian"
-    elif any(word in question_lower for word in ["proyek", "project", "karya", "portfolio", "aplikasi", "buat apa", "telah dibuat", "terbaik", "unggulan"]):
-        return "proyek"
-    elif any(word in question_lower for word in ["tantangan", "challenge", "kesulitan", "masalah", "problem", "hambatan"]):
-        return "tantangan_proyek"
-    elif any(word in question_lower for word in ["hobi", "suka", "waktu luang", "kegiatan", "aktivitas", "senang"]):
-        return "hobi"
-    elif any(word in question_lower for word in ["pendidikan", "sekolah", "kuliah", "belajar", "kampus", "universitas", "itb", "masuk itb", "masuk kuliah", "jurusan"]):
+        # cek kata-kata eksak
+        for word in question_words:
+            if word in keywords:
+                matches += 1
+                matched_words.append(word)
+        
+        # cek frasa lengkap
+        for keyword in keywords:
+            if ' ' in keyword and keyword in question:
+                matches += 2  # berikan bobot lebih untuk frasa lengkap
+                matched_words.append(keyword)
+        
+        # cek fuzzy matching untuk kata yang belum cocok
+        for word in question_words:
+            if word not in matched_words and len(word) > 3:  # hanya cek kata yang cukup panjang
+                match = fuzzy_match(word, keywords)
+                if match:
+                    matches += 0.5  # bobot lebih rendah untuk fuzzy match
+                    matched_words.append(word)
+        
+        word_category_counts[category] = matches
+    
+    # tambahkan kategori lain dengan definisi manual
+    other_categories = {
+        "mata_kuliah": ["pelajaran favorit", "mata kuliah favorit", "mata pelajaran", "pelajaran", "kuliah favorit"],
+        "lokasi": ["lokasi", "tinggal", "domisili", "alamat", "kota", "daerah", "rumah"],
+        "prestasi": ["prestasi", "pencapaian", "award", "penghargaan", "juara"],
+        "lomba": ["lomba", "kompetisi", "contest", "hackathon", "datathon"],
+        "data_science": ["data", "data science", "analisis data", "big data", "statistik", "machine learning", "ml"],
+        "tools": ["tool", "alat", "software", "library", "framework", "favorit", "suka pakai"],
+        "karakter": ["karakter", "kepribadian", "sifat", "tipe", "mbti", "orangnya", "pemalu", "extrovert", "introvert"],
+        "portofolio_tech": ["portofolio ini", "website ini", "web ini", "dibuat pakai", "teknologi"],
+        "rencana": ["rencana", "masa depan", "target", "tujuan", "cita", "5 tahun"],
+        "pekerjaan": ["pekerjaan", "kerja", "profesi", "karir", "jabatan"],
+        "pengalaman": ["pengalaman", "experience", "lama kerja"],
+        "manajemen_waktu": ["waktu", "manage", "manajemen", "atur waktu", "produktif"],
+        "manajemen_stres": ["stres", "stress", "tekanan", "pressure", "beban", "handle"],
+        "cerita_kuliah": ["cerita", "momen", "pengalaman kuliah", "culture shock", "berkesan"],
+        "organisasi": ["organisasi", "berorganisasi", "komunitas", "kepanitiaan"],
+        "belajar_mandiri": ["belajar mandiri", "autodidak", "self-taught", "tutorial"],
+        "belajar_kegagalan": ["kegagalan", "gagal", "failure", "kesalahan", "mistake"],
+        "kerja_tim": ["tim", "team", "kerja tim", "kolaborasi", "konflik"],
+        "kebiasaan_ngoding": ["ngoding", "coding", "kode", "malam", "produktif"],
+        "moto_hidup": ["moto", "motto", "quotes", "quote", "kutipan", "kata-kata"]
+    }
+    
+    for category, keywords in other_categories.items():
+        if any(keyword in question for keyword in keywords):
+            word_category_counts[category] = word_category_counts.get(category, 0) + 1
+    
+    # pemeriksaan khusus untuk pendidikan
+    education_keywords = ["pendidikan", "sekolah", "kuliah", "belajar", "kampus", "universitas", "itb", "masuk itb", "masuk kuliah", "jurusan"]
+    if any(keyword in question for keyword in education_keywords):
         return "pendidikan"
-    elif any(word in question_lower for word in ["pelajaran favorit", "mata kuliah favorit", "mata pelajaran"]):
-        return "mata_kuliah"
-    elif any(word in question_lower for word in ["lokasi", "tinggal", "domisili", "alamat", "kota", "daerah", "rumah"]):
-        return "lokasi"
-    elif any(word in question_lower for word in ["prestasi", "pencapaian", "award", "penghargaan", "juara"]):
-        return "prestasi"
-    elif any(word in question_lower for word in ["lomba", "kompetisi", "contest", "hackathon", "datathon"]):
-        return "lomba"
-    elif any(word in question_lower for word in ["data", "data science", "analisis data", "big data", "statistik", "machine learning", "ml"]):
-        return "data_science"
-    elif any(word in question_lower for word in ["ai", "artificial intelligence", "kecerdasan buatan"]):
-        return "data_science" 
-    elif any(word in question_lower for word in ["tool", "alat", "software", "library", "framework", "favorit", "suka pakai"]):
-        return "tools"
-    elif any(word in question_lower for word in ["karakter", "kepribadian", "sifat", "tipe", "mbti", "orangnya", "pemalu", "extrovert", "introvert"]):
-        return "karakter"
-    elif any(word in question_lower for word in ["portofolio ini", "website ini", "web ini", "dibuat pakai", "teknologi"]):
-        return "portofolio_tech"
-    elif any(word in question_lower for word in ["rencana", "masa depan", "target", "tujuan", "cita", "5 tahun"]):
-        return "rencana"
-    elif any(word in question_lower for word in ["pekerjaan", "kerja", "profesi", "karir", "jabatan"]):
-        return "pekerjaan"
-    elif any(word in question_lower for word in ["pengalaman", "experience", "lama kerja"]):
-        return "pengalaman"
-    elif any(word in question_lower for word in ["waktu", "manage", "manajemen", "atur waktu", "produktif"]):
-        return "manajemen_waktu"
-    elif any(word in question_lower for word in ["stres", "stress", "tekanan", "pressure", "beban", "handle"]):
-        return "manajemen_stres"
-    elif any(word in question_lower for word in ["cerita", "momen", "pengalaman kuliah", "culture shock", "berkesan"]):
-        return "cerita_kuliah"
-    elif any(word in question_lower for word in ["organisasi", "berorganisasi", "komunitas", "kepanitiaan"]):
-        return "organisasi"
-    elif any(word in question_lower for word in ["belajar mandiri", "autodidak", "self-taught", "tutorial"]):
-        return "belajar_mandiri"
-    elif any(word in question_lower for word in ["kegagalan", "gagal", "failure", "kesalahan", "mistake"]):
-        return "belajar_kegagalan"
-    elif any(word in question_lower for word in ["tim", "team", "kerja tim", "kolaborasi", "konflik"]):
-        return "kerja_tim"
-    elif any(word in question_lower for word in ["ngoding", "coding", "kode", "malam", "produktif"]):
-        return "kebiasaan_ngoding"
-    elif any(word in question_lower for word in ["moto", "motto", "quotes", "quote", "kutipan", "kata-kata"]):
-        return "moto_hidup"
-    else:
-        return "general"
+    
+    # tentukan kategori dengan skor tertinggi
+    if word_category_counts:
+        top_category = max(word_category_counts.items(), key=lambda x: x[1])
+        if top_category[1] > 0:  # pastikan minimal ada satu kecocokan
+            return top_category[0]
+    
+    # cek apakah pertanyaan kurang jelas
+    if len(question.split()) < 3:
+        return "unclear_question"
+    
+    # default ke general jika tidak ada kategori yang cocok
+    return "general"
+
+# fungsi untuk respons ketika pertanyaan tidak jelas
+def generate_clarification_response() -> str:
+    clarifications = [
+        "Hmm, pertanyaanmu kurang spesifik nih. Coba tanyakan lebih detail tentang hobi, proyek, keahlian, atau lagu favorit?",
+        "Maaf, aku kurang paham maksud pertanyaanmu. Bisa lebih spesifik? Misalnya tentang pendidikan, proyek, atau teknologi yang kugunakan?",
+        "Pertanyaanmu terlalu singkat nih. Coba lebih spesifik ya, misalnya tanya tentang lagu favoritku, makanan yang kusuka, atau proyek yang kukerjakan?",
+        "Aku kurang yakin apa yang kamu tanyakan. Bisa diperjelas? Kamu bisa tanya tentang pengalamanku, keahlian teknis, atau rencana masa depanku.",
+        "Wah, aku tidak yakin apa yang kamu maksud. Mungkin kamu mau tahu tentang mata kuliah favoritku, hobi, atau teknologi yang sering kugunakan?"
+    ]
+    return random.choice(clarifications)
 
 # menyusun prompt yang kontekstual
 def create_context_aware_prompt(question: str) -> str:
@@ -254,13 +338,25 @@ def create_context_aware_prompt(question: str) -> str:
     - Karakter: {user_profile['karakter']}
     """
     
+    # jika pertanyaan tidak jelas, minta klarifikasi
+    if category == "unclear_question":
+        base_prompt += f"""
+        Pertanyaan pengguna kurang jelas. Berikan respons yang meminta klarifikasi lebih lanjut.
+        Tawarkan beberapa opsi topik yang bisa ditanyakan, seperti hobi, keahlian, proyek, atau lagu favorit.
+        
+        Pertanyaan pengguna: {question}
+        
+        Jawab dengan bahasa Indonesia yang santai dan natural. Gunakan "aku" untuk merujuk diri sendiri.
+        """
+        return base_prompt
+    
     # penanganan pertanyaan personal
     if category.startswith("personal_"):
         base_prompt += f"""
         Kamu mendapat pertanyaan yang bersifat personal dan sebaiknya dialihkan. Berikan jawaban dengan format:
         
-        1. Mulai dengan pernyataan halus bahwa kamu tidak bisa menjawab pertanyaan personal itu (misalnya "Waduh, aku kurang nyaman membahas hal-hal personal seperti itu" atau "Hmm, aku nggak bisa jawab pertanyaan pribadi itu ya")
-        2. Lalu alihkan pembicaraan ke topik profesional, seperti keahlian atau proyek (misalnya "Tapi yang jelas, aku bisa cerita kalau...")
+        1. Mulai dengan pernyataan halus bahwa kamu tidak bisa menjawab pertanyaan personal itu
+        2. Lalu alihkan pembicaraan ke topik profesional, seperti keahlian atau proyek
         3. Jangan menyebutkan hal-hal personal yang ditanyakan sama sekali dalam jawabanmu
         
         PENTING: Jangan jawab pertanyaan personal apapun, tetapi juga jangan terlalu frontal dalam penolakan.
@@ -314,7 +410,7 @@ def create_context_aware_prompt(question: str) -> str:
         Detail hobi:
         {json.dumps(user_profile['hobi_detail'], indent=2, ensure_ascii=False)}
         
-        Pertanyaan pengguna adalah tentang hobi. Jawab dengan menjelaskan hobi yang disukai, mengapa menyukainya, dan bagaimana meluangkan waktu untuk hobi tersebut. Berikan beberapa cerita menarik terkait hobi.
+        Pertanyaan pengguna adalah tentang hobi. Jawab dengan menjelaskan hobi yang disukai, seperti membaca novel (terutama 'Omniscient Reader Viewpoint'), traveling ke destinasi lokal, atau menjelajahi street food. Jangan menyebutkan hobi hiking. Berikan beberapa cerita menarik terkait hobi.
         """
     elif category == "pendidikan":
         base_prompt += f"""
@@ -459,7 +555,18 @@ def create_context_aware_prompt(question: str) -> str:
         Lagu favorit:
         {json.dumps(user_profile['lagu_favorit'], indent=2, ensure_ascii=False)}
         
-        Pertanyaan pengguna adalah tentang lagu favorit. Ceritakan lagu yang disukai seperti "Without You" dari Air Supply dan "Sekali Ini Saja" dari Glenn Fredly. Jelaskan juga preferensi untuk lagu oldies dari Bee Gees, Westlife, atau Backstreet Boys saat ngoding.
+        Pertanyaan pengguna adalah tentang lagu atau musik favorit. Jelaskan dengan detail lagu-lagu yang disukai seperti "Without You" dari Air Supply, "Sekali Ini Saja" dari Glenn Fredly, atau genre musik oldies yang disukai. Sebutkan juga lagu atau jenis musik yang sering didengarkan saat ngoding.
+        
+        PENTING: Pastikan jawabanmu benar-benar fokus pada lagu dan musik yang disukai, bukan topik lain seperti hobi atau keahlian. Bahkan jika pertanyaannya ambigu, prioritaskan untuk menjawab tentang musik.
+        """
+    elif category == "makanan_favorit":
+        base_prompt += f"""
+        Makanan favorit:
+        {json.dumps(user_profile['makanan_favorit'], indent=2, ensure_ascii=False)}
+        
+        Pertanyaan pengguna adalah tentang makanan favorit, terutama street food Indonesia. Jelaskan makanan-makanan jalanan yang disukai seperti martabak, sate, dan berbagai jenis gorengan. Ceritakan juga pengalaman mencoba street food di berbagai tempat dan kenapa street food Indonesia itu istimewa.
+        
+        PENTING: Pastikan jawabanmu berfokus pada makanan, terutama street food, dan berikan detail yang membuat jawaban terasa personal dan autentik.
         """
     elif category == "moto_hidup":
         base_prompt += f"""
@@ -488,6 +595,8 @@ def create_context_aware_prompt(question: str) -> str:
     Jawab dengan bahasa Indonesia yang santai dan alami (tidak kaku), tapi tetap informatif. Gunakan sapaan "aku" saat merujuk diri sendiri dan "kamu" saat merujuk pengguna. Variasikan struktur kalimat untuk terdengar natural. Berikan contoh spesifik dan detail untuk mengilustrasikan poin yang disampaikan. Gunakan sedikit humor yang relevan jika sesuai. Respons max 4-5 kalimat.
     
     PENTING: Pastikan respons kamu tidak mengandung spasi berlebih, pastikan transisi antar kalimat alami dan jelas.
+    
+    SANGAT PENTING: Jika pertanyaan tentang lagu atau musik, jawablah HANYA tentang lagu favorit dan jangan membahas hobi atau topik lain. Jika pertanyaan tentang makanan, jawablah HANYA tentang makanan favorit terutama street food.
     """
     
     return base_prompt
@@ -495,24 +604,7 @@ def create_context_aware_prompt(question: str) -> str:
 # fungsi untuk normalisasi teks respons
 def normalize_text(text: str) -> str:
     # hapus spasi berlebih dan standardisasi tanda baca
-    cleaned = (text
-        .replace(r'\s+', ' ')        # ganti multiple spaces dengan single space
-        .replace(r'\s+\.', '.')      # hapus spasi sebelum tanda titik
-        .replace(r'\s+,', ',')       # hapus spasi sebelum koma
-        .replace(r',\s+', ', ')      # standarisasi spasi setelah koma
-        .replace(r'\.\s+', '. ')     # standarisasi spasi setelah titik
-        .replace(r'\s+!', '!')       # hapus spasi sebelum tanda seru
-        .replace(r'!\s+', '! ')      # standarisasi spasi setelah tanda seru
-        .replace(r'\s+\?', '?')      # hapus spasi sebelum tanda tanya
-        .replace(r'\?\s+', '? ')     # standarisasi spasi setelah tanda tanya
-        .replace(r'\s+:', ':')       # hapus spasi sebelum titik dua
-        .replace(r':\s+', ': ')      # standarisasi spasi setelah titik dua
-        .replace(r'\s+;', ';')       # hapus spasi sebelum titik koma
-        .replace(r';\s+', '; ')      # standarisasi spasi setelah titik koma
-    )
-    
-    # gunakan regex untuk hapus spasi berlebih
-    cleaned = re.sub(r'\s+', ' ', cleaned)
+    cleaned = re.sub(r'\s+', ' ', text)
     cleaned = re.sub(r'\s+\.', '.', cleaned)
     cleaned = re.sub(r'\s+,', ',', cleaned)
     cleaned = re.sub(r',\s+', ', ', cleaned)
@@ -521,6 +613,10 @@ def normalize_text(text: str) -> str:
     cleaned = re.sub(r'!\s+', '! ', cleaned)
     cleaned = re.sub(r'\s+\?', '?', cleaned)
     cleaned = re.sub(r'\?\s+', '? ', cleaned)
+    cleaned = re.sub(r'\s+:', ':', cleaned)
+    cleaned = re.sub(r':\s+', ': ', cleaned)
+    cleaned = re.sub(r'\s+;', ';', cleaned)
+    cleaned = re.sub(r';\s+', '; ', cleaned)
     
     return cleaned.strip()
 
@@ -602,7 +698,7 @@ async def ask_ai(request: QuestionRequest):
 @app.post("/ask-mock", response_model=AIResponse)
 async def ask_ai_mock(request: QuestionRequest):
     try:
-        question = request.question.lower()
+        question = request.question
         category = categorize_question(question)
         
         # variasi pembuka yang lebih natural
@@ -615,6 +711,10 @@ async def ask_ai_mock(request: QuestionRequest):
             "Ah, ",
             "Well, "
         ]
+        
+        # jika pertanyaan tidak jelas, minta klarifikasi
+        if category == "unclear_question":
+            return AIResponse(response=generate_clarification_response())
         
         # respons untuk pertanyaan personal
         if category.startswith("personal_"):
@@ -687,9 +787,9 @@ async def ask_ai_mock(request: QuestionRequest):
         elif category == "hobi":
             hobby = random.choice(user_profile['hobi'])
             responses = [
-                f"Di luar coding, aku suka banget {hobby.lower()}. Menurutku ini bagus untuk refresh otak setelah lama menatap layar dan coding. Kadang juga traveling ke destinasi lokal kalau weekend dan cuacanya bagus.",
-                f"Kalau lagi senggang, biasanya aku {hobby.lower()}. Ini jadi semacam 'me time' yang penting untuk balance kerja-hidup. Hobi ini juga sering memberi inspirasi baru untuk proyek-proyek data science.",
-                f"Hobi utamaku adalah {hobby.lower()} dan kadang hiking di akhir pekan. Hobi ini benar-benar membantu menyegarkan pikiran dari pekerjaan teknis sehari-hari di data science."
+                f"Di luar coding, aku suka banget {hobby.lower()}. Khususnya untuk membaca, aku suka novel fantasi seperti Omniscient Reader Viewpoint. Selain itu, aku juga hobi jelajah street food di sekitar Jakarta dan traveling ke destinasi lokal kalau ada waktu luang.",
+                f"Kalau lagi senggang, biasanya aku {hobby.lower()}. Untuk novel, aku suka baca genre fantasi dan sci-fi, terutama novel Omniscient Reader Viewpoint yang plotnya keren banget. Aku juga suka jelajah berbagai street food Indonesia dan traveling ke tempat-tempat yang belum pernah kukunjungi.",
+                f"Hobi utamaku adalah {hobby.lower()} dan menjelajahi street food Indonesia. Aku suka baca novel fantasi seperti Omniscient Reader Viewpoint yang ceritanya unik. Traveling juga jadi cara refreshing favoritku sambil coba-coba kuliner lokal di berbagai daerah."
             ]
             
             response = random.choice(responses)
@@ -835,7 +935,7 @@ async def ask_ai_mock(request: QuestionRequest):
             responses = [
                 "Kuliah di ITB memang udah sering melatih ketahanan menghadapi tekanan, jadi handling stres jadi skill wajib. Cara favoritku mengatasi stres adalah dengan menonton film horror/romance atau drama Korea untuk sejenak escape dari dunia coding. Kadang juga sempatkan olahraga ringan atau jalan-jalan singkat untuk me-refresh pikiran.",
                 "Buat handle stres, aku punya jurus jitu: nonton film horror atau romance, atau drama Korea yang seru. Kuliah di ITB dengan tekanannya yang tinggi bikin aku terbiasa dengan deadline dan ekspektasi tinggi. Aku juga percaya pentingnya deep breathing dan short breaks saat coding marathon untuk menjaga kejernihan pikiran.",
-                "Dengan tekanan akademik yang tinggi di ITB, aku belajar mengelola stres dengan baik. Biasanya aku menyempatkan menonton film horror/romance atau drama Korea sebagai escape. Kadang juga melakukan hobby lain seperti hiking di akhir pekan. Menurut pengalamanku, penting untuk punya 'mental shutdown time' di antara sesi coding intensif."
+                "Dengan tekanan akademik yang tinggi di ITB, aku belajar mengelola stres dengan baik. Biasanya aku menyempatkan menonton film horror/romance atau drama Korea sebagai escape. Kadang juga melakukan hobby lain seperti membaca novel. Menurut pengalamanku, penting untuk punya 'mental shutdown time' di antara sesi coding intensif."
             ]
             
             response = random.choice(responses)
@@ -903,9 +1003,22 @@ async def ask_ai_mock(request: QuestionRequest):
             
         elif category == "lagu_favorit":
             responses = [
-                "Lagu favoritku saat ini adalah Without You dari Air Supply, liriknya bener-bener mengena. Juga suka lagu-lagu Glenn Fredly seperti 'Sekali Ini Saja'. Ketika ngoding, playlist-ku biasanya berisi lagu-lagu klasik dari era 90an dan 2000an seperti hits dari Bee Gees, Westlife, atau Backstreet Boys yang bikin mood coding jadi lebih enak.",
-                "Untuk saat ini, aku seneng dengerin Without You dari Air Supply, liriknya dalem dan relate banget sama aku. Kalau lagu Indonesia, aku suka denger Glenn Fredly kayak 'Sekali Ini Saja'. Pas lagi ngoding, aku condong ke lagu oldies atau 'old but gold' dengan artis kayak Bee Gees, Westlife, dan Backstreet Boys.",
-                "Aku pecinta musik oldies! Saat ngoding suka dengerin Bee Gees, Westlife, atau Backstreet Boys yang bikin nostalgia. Lagu favorit saat ini Without You dari Air Supply. Untuk lagu Indonesia, aku suka karya-karya Glenn Fredly terutama 'Sekali Ini Saja' yang melodinya bikin nyaman."
+                "Untuk lagu favorit, aku suka banget 'Without You' dari Air Supply, melodinya bikin nostalgia. Dari musisi Indonesia, aku suka lagu-lagu Glenn Fredly terutama 'Sekali Ini Saja' yang liriknya dalam banget. Saat coding, biasanya aku dengerin lagu oldies atau playlist lo-fi beats yang bikin fokus, kadang juga soundtrack film yang epic.",
+                "Selera musikku cukup beragam, tapi yang paling sering kudengarkan adalah lagu-lagu ballad seperti 'Without You' dari Air Supply dan 'My Heart Will Go On' dari Celine Dion. Untuk lagu Indonesia, aku suka 'Sekali Ini Saja' Glenn Fredly dan 'Separuh Aku' Noah. Kalau lagi ngoding biasanya putar lo-fi beats atau musik instrumental biar fokus.",
+                "Lagu favoritku 'Without You' dari Air Supply yang melodinya bikin nyaman, dan 'Sekali Ini Saja' dari Glenn Fredly untuk lagu Indonesia. Saat ngoding, biasanya aku dengerin playlist lo-fi atau soundtrack film yang nggak terlalu mengganggu konsentrasi. Genre yang paling sering kudengarkan adalah pop 90an dan ballad yang liriknya mengena."
+            ]
+            
+            response = random.choice(responses)
+            full_response = random.choice(pembuka) + response
+            
+        elif category == "makanan_favorit":
+            foods = user_profile['makanan_favorit']['street_food']
+            favorite_food = random.choice(foods)
+            
+            responses = [
+                f"Kalau soal makanan, aku penggemar berat street food Indonesia! Favoritku sih pasti {favorite_food} dan juga sate ayam yang pake bumbu kacang. Di Jakarta, aku sering banget berburu street food di malam hari, dari mulai gorengan, ketoprak, sampai batagor. Ada kepuasan tersendiri nyobain makanan jalanan yang authentic dan berinteraksi langsung sama penjualnya.",
+                f"Aku suka banget street food Indonesia! Yang jadi favorit nomor satu adalah {favorite_food}, tapi aku juga doyan banget batagor dan ketoprak. Menurutku street food Indonesia itu unik dan punya cita rasa yang nggak ada duanya. Rasanya kaya dan bumbu-bumbunya kompleks, tapi harganya tetap terjangkau. Perfect untuk nemenin sesi coding marathon!",
+                f"Soal kuliner, aku ini fans berat street food Indonesia. Paling suka {favorite_food}, tapi juga doyan banget sate ayam dan berbagai jenis gorengan. Jakarta punya banyak spot street food keren yang sering kujelajahi kalau lagi butuh inspirasi atau sekedar refreshing dari rutinitas coding. Makanan jalanan itu punya cerita dan karakter tersendiri yang bikin nagih."
             ]
             
             response = random.choice(responses)
@@ -955,7 +1068,6 @@ async def ask_ai_mock(request: QuestionRequest):
 async def root():
     return {"message": "AI Portfolio Backend berjalan. Gunakan endpoint /ask untuk bertanya."}
 
-# menjalankan aplikasi
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
