@@ -21,15 +21,15 @@ app = FastAPI(title="AI Portfolio Backend")
 
 frontend_url = os.getenv("FRONTEND_URL", "https://frontend-portofolio-danen.vercel.app")
 
-# Split multiple URLs jika frontend_url berisi koma
+# Split dan bersihkan URLs
 allowed_origins = []
 if frontend_url:
-    print(f"Frontend URL from env: {frontend_url}")
     for url in frontend_url.split(','):
-        url = url.strip()
-        allowed_origins.append(url)
-        print(f"Added origin: {url}")
+        url = url.strip()  # Hapus whitespace
+        if url:  # Hanya tambahkan jika tidak kosong
+            allowed_origins.append(url)
 
+# Tambahkan URL tambahan yang diperlukan (tanpa semicolon)
 additional_origins = [
     "http://localhost:3000",
     "https://frontend-portofolio-danen.vercel.app",
@@ -40,8 +40,8 @@ additional_origins = [
 for origin in additional_origins:
     if origin not in allowed_origins:
         allowed_origins.append(origin)
-        print(f"Added additional origin: {origin}")
 
+# Tampilkan semua origins yang diizinkan
 print(f"Final allowed origins: {allowed_origins}")
 
 app.add_middleware(
@@ -51,6 +51,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 # model untuk request
 class QuestionRequest(BaseModel):
     question: str
