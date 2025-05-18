@@ -343,12 +343,27 @@ user_profile = {
     }
 }
 
-# fungsi untuk mengecek apakah input adalah gibberish (teks tidak masuk akal)
 def is_gibberish(text: str) -> bool:
-    if len(text) < 3:
+    if len(text) < 2:  # lebih permisif untuk pertanyaan singkat
         return False
         
     text = text.lower()
+    
+    # pertanyaan singkat tentang teknologi diterima
+    if any(tech in text for tech in ["python", "react", "java", "next.js", "data science"]):
+        return False
+    
+    # pertanyaan dengan "ceritakan" atau "bagaimana" diterima
+    if any(key in text for key in ["ceritakan", "bagaimana", "gimana", "tentang"]):
+        return False
+    
+    # cek jika pertanyaan terlalu pendek (< 2 kata)
+    if len(text.split()) < 2:
+        # hanya valid jika ini adalah kata kunci khusus
+        valid_terms = ["python", "react", "java", "next", "hobi", "makanan", "lagu", "proyek"]
+        return not any(term in text for term in valid_terms)
+    
+    # pengecekan konsonan berturut-turut
     consonants = "bcdfghjklmnpqrstvwxyz"
     vowels = "aeiou"
     
@@ -362,6 +377,7 @@ def is_gibberish(text: str) -> bool:
         else:
             current_consonants = 0
     
+    # hitung rasio vokal
     char_counts = {}
     for char in text:
         if char.isalpha():
@@ -370,33 +386,15 @@ def is_gibberish(text: str) -> bool:
     vowel_count = sum(char_counts.get(v, 0) for v in vowels)
     total_chars = sum(char_counts.values())
     
+    # deteksi konsonan berturut-turut yang tidak wajar
     if max_consecutive_consonants >= 4:
         return True
     
+    # deteksi rasio vokal yang tidak wajar
     if total_chars > 0 and vowel_count / total_chars < 0.1:
         return True
     
-    for length in range(2, min(5, len(text) // 2 + 1)):
-        for start in range(len(text) - length * 2 + 1):
-            if text[start:start+length] == text[start+length:start+length*2]:
-                return True
-    
-    words = text.split()
-    valid_words = set([
-        "hai", "halo", "apa", "siapa", "kenapa", "dimana", "kapan", "bagaimana", "mengapa",
-        "kamu", "aku", "saya", "dia", "mereka", "kita", "yang", "dan", "atau", "tapi",
-        "untuk", "dari", "dengan", "tanpa", "tentang", "karena", "sebab", "akibat",
-        "makanan", "hobi", "lagu", "favorit", "suka", "bisa", "coba", "tolong", 
-        "proyek", "coding", "ngoding", "program", "aplikasi", "website", "skill", "keahlian",
-        "belajar", "kuliah", "sekolah", "kampus", "itb", "informatika", "komputer",
-        "data", "science", "python", "react", "javascript", "java", "next", "nextjs"
-    ])
-    
-    valid_word_count = sum(1 for word in words if word.lower() in valid_words)
-    
-    if len(words) > 2 and valid_word_count == 0:
-        return True
-        
+    # apapun yang tersisa dianggap valid
     return False
 
 # fungsi untuk mendeteksi intent/sentiment dari pertanyaan
@@ -516,6 +514,12 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
         logger.info(f"Detected gibberish: {question}")
         return "gibberish"
     
+    # pertanyaan sangat singkat tentang teknologi
+    if len(question_words) <= 2:
+        tech_keywords = ["python", "react", "java", "next.js", "data science"]
+        if any(keyword in question.lower() for keyword in tech_keywords):
+            return "teknologi"
+    
     # deteksi pertanyaan khusus rekrutmen/hiring
     recruitment_patterns = [
         r'kenapa (?:saya|aku) harus (?:merekrut|hire)',
@@ -549,7 +553,7 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
                 if context.last_category:
                     return context.last_category + "_followup"
     
-    # pengecekan kategori personal dulu
+    # pengecekan kategori personal
     personal_checks = [
         (["pacar", "jodoh", "pacaran", "pasangan", "gebetan", "wanita", "nikah", "menikah", "single", "lajang", "status hubungan"], "personal_relationship"),
         (["gaji", "salary", "penghasilan", "bayaran", "uang", "kekayaan", "sebulan", "pendapatan"], "personal_financial"),
@@ -635,6 +639,10 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
         if top_category[1] > 0:
             logger.info(f"Selected category with score: {top_category}")
             return top_category[0]
+    
+    # cek apakah pertanyaan python (khusus karena sering digunakan)
+    if "python" in question.lower():
+        return "teknologi"
     
     # cek apakah pertanyaan terlalu pendek atau kurang jelas
     if len(question.split()) < 3:
@@ -755,10 +763,12 @@ def generate_interactive_response(question: str, category: str, context: Convers
         
     elif category == "lagu_favorit":
         content_responses = [
-            "Selera musik nostalgic. 'Without You' Air Supply, 'Sekali Ini Saja' Glenn Fredly. Coding pakai lo-fi beats atau soundtrack film.",
-            "Suka ballad 90an. Lirik dalam, melodi timeless. Ada emotional connection yang bikin rileks pas overwhelmed.",
-            "Mix Indonesia dan barat klasik. Glenn Fredly, Noah dari lokal. Air Supply, Celine Dion internasional. Mostly pop ballad.",
-            "Musik punya fungsi beda. Ballad buat relaxing, instrumental buat coding, oldies buat mood booster. Playlist organized by activity."
+            "Seleranya musik nostalgic & oldies gitu sih. Lagi relate banget sama 'Without You' Air Supply, tapi 'Sekali Ini Saja' Glenn Fredly gak kalah sih. Kalau coding biasanya pakai lo-fi beats atau soundtrack film kayak Star Wars yang bikin suasana lebih intens dan bikin gak ngantuk.",
+            "Suka semua lagu, semua generasi. Tapi oldies selalu juaranya, lirik dalem, gak pernah bosenin. Ada emotional connection yang bikin rileks pas overwhelmed.",
+            "Mix Indonesia dan barat klasik sih. Glenn Fredly, Noah, Air Supply, Celine Dion, Queen",
+            "Musik favorit itu subjective. Tapi kalau ditanya, oldies jadi pilihan prioritas. Bikin relax dan nostalgia. Lo-fi beats juga enak buat coding.",
+            "Waduh, banyak banget. Dari oldies kayak Air Supply, Glenn Fredly, Glimpse of Us. Setiap mood ada lagunya.",
+            "Apapun lagunya yang kamu denger mungkin aku dengerin, apa mau mutual spotify nih?"
         ]
         
     elif category == "hobi":
