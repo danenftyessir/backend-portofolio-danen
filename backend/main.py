@@ -67,14 +67,15 @@ class AIResponse(BaseModel):
     response: str
     session_id: str
 
-# struktur session untuk konteks percakapan
+# struktur session untuk konteks percakapan (revisi)
 class ConversationContext:
     def __init__(self):
         self.last_category: Optional[str] = None
-        self.mentioned_items: List[str] = []
+        self.mentioned_items: Set[str] = set()  # gunakan set untuk efisiensi
         self.previous_responses: List[str] = []
         self.questions_history: List[str] = []
         self.last_updated: float = time.time()
+        self.referenced_items: Dict[str, int] = defaultdict(int)  # track frekuensi referensi
     
     def update(self, category: str, question: str, response: str = None):
         self.last_category = category
@@ -82,30 +83,36 @@ class ConversationContext:
         if response:
             self.previous_responses.append(response)
             self.extract_mentioned_items(response)
+        
+        # track item yang direferensikan dalam pertanyaan
+        for item in self.mentioned_items:
+            if re.search(r'\b' + re.escape(item) + r'\b', question.lower()):
+                self.referenced_items[item] += 1
+        
         self.last_updated = time.time()
     
     def extract_mentioned_items(self, response: str):
-        # Ekstrak item-item penting yang disebutkan dalam respons
-        # Ini akan digunakan untuk mendeteksi referensi di pertanyaan selanjutnya
+        # ekstrak item-item penting yang disebutkan dalam respons
+        # ini akan digunakan untuk mendeteksi referensi di pertanyaan selanjutnya
         
-        # Ekstrak makanan yang disebutkan
+        # ekstrak makanan yang disebutkan - dengan word boundaries
         food_patterns = [
-            r'(martabak|sate|gorengan|ketoprak|batagor|nasi padang|soto|bakso|keripik|cimol|basreng)',
+            r'\b(martabak|sate|gorengan|ketoprak|batagor|nasi padang|soto|bakso|keripik|cimol|basreng)\b',
             r'street food (\w+)',
             r'makanan (\w+)'
         ]
         
-        # Ekstrak lagu/artis yang disebutkan
+        # ekstrak lagu/artis yang disebutkan - dengan word boundaries
         music_patterns = [
-            r'(Without You|Air Supply|Glenn Fredly|Sekali Ini Saja|Noah|Separuh Aku|Celine Dion|My Heart Will Go On)',
+            r'\b(without you|air supply|glenn fredly|sekali ini saja|noah|separuh aku|celine dion|my heart will go on)\b',
             r'lagu "([^"]+)"',
             r'lagu ([A-Za-z\s]+) dari',
-            r'(lo-fi|instrumental|soundtrack)'
+            r'\b(lo-fi|instrumental|soundtrack)\b'
         ]
         
-        # Ekstrak hobi yang disebutkan
+        # ekstrak hobi yang disebutkan - dengan word boundaries
         hobby_patterns = [
-            r'(membaca|novel|Omniscient Reader|street food|traveling|wisata|destinasi)',
+            r'\b(membaca|novel|omniscient reader|street food|traveling|wisata|destinasi)\b',
             r'hobi ([a-zA-Z\s]+)'
         ]
         
@@ -117,13 +124,14 @@ class ConversationContext:
                 for match in matches:
                     if isinstance(match, tuple):
                         for item in match:
-                            if item and len(item) > 3:  # Filter out short or empty matches
-                                self.mentioned_items.append(item.strip())
+                            if item and len(item) > 3:  # filter out short or empty matches
+                                self.mentioned_items.add(item.strip())
                     elif match and len(match) > 3:
-                        self.mentioned_items.append(match.strip())
-        
-        # Hapus duplikat
-        self.mentioned_items = list(set(self.mentioned_items))
+                        self.mentioned_items.add(match.strip())
+
+    def get_most_referenced_items(self, limit=3):
+        # mendapatkan item yang paling sering direferensikan
+        return sorted(self.referenced_items.items(), key=lambda x: x[1], reverse=True)[:limit]
 
 # penyimpanan session percakapan
 conversation_sessions = {}
@@ -252,36 +260,65 @@ user_profile = {
     }
 }
 
-# Ekstrak item-item untuk pengenalan konteks
+# konten khusus untuk pertanyaan follow-up
+specific_follow_up_responses = {
+    "ketoprak": [
+        "Yup, ketoprak emang enak banget! Aku suka kombinasi lontong, tahu, dan bumbu kacang yang gurihnya pas. Di Jakarta ada beberapa spot ketoprak legendaris yang jadi langgananku, terutama yang bumbunya masih authentic. Tekstur dan rasanya benar-benar bikin ketagihan, apalagi kalau lagi coding marathon!",
+        "Iya dong, ketoprak itu salah satu street food favoritku! Aku suka banget sama tekstur lontongnya yang lembut, tahu yang gurih, dan sausnya yang creamy dari kacang. Ada sensasi tersendiri melihat penjualnya menyiapkan ketoprak fresh di depan mata. Biasanya aku tambah kerupuk dan bawang goreng biar makin mantap.",
+        "Ketoprak itu beneran enak banget! Aku suka kombinasi rasa manis, asin, dan sedikit asam dari bumbunya, ditambah kecap dan taburan bawang goreng yang bikin makin sedap. Di Jakarta, aku punya beberapa tempat favorit yang jadi langganan. Kalau kamu suka ketoprak juga, coba cari yang pakai kerupuk kuning dan ditambah telor, itu lebih mantap!"
+    ],
+    "martabak": [
+        "Martabak itu memang juara sih! Aku suka martabak manis yang topping-nya full, mulai dari coklat, keju, kacang, hingga susu. Tekstur pinggirnya yang kriuk dan tengahnya yang lembut itu kombinasi sempurna. Kalau di Jakarta, ada beberapa spot martabak legendaris yang selalu rame sampai tengah malam.",
+        "Martabak emang jadi comfort food favoritku. Aku lebih suka yang manis dengan kombinasi coklat-keju, apalagi kalau masih anget dan lumer. Kadang juga suka martabak telur yang garing di luar tapi tetap juicy di dalam. Paling enak dimakan bareng teman sambil ngobrol santai atau saat coding marathon."
+    ],
+    "sate": [
+        "Sate ayam itu salah satu street food Indonesia terbaik! Aku suka banget sensasi daging ayam yang empuk dan bumbu kacang yang creamy dengan sentuhan kecap manis. Biasanya aku makan sate di daerah Sabang atau Senayan yang terkenal enak. Apalagi kalau ditambah lontong dan acar, sempurna deh!",
+        "Sate emang makanan yang selalu bikin nagih. Aku suka sate ayam dengan bumbu kacang kental dan sedikit pedas. Proses pembakarannya yang bikin aroma khasnya itu loh yang bikin lapar. Kadang aku juga suka sate kambing atau sate padang yang bumbunya berbeda tapi sama-sama enak."
+    ],
+    "without you": [
+        "Without You dari Air Supply itu memang lagu yang sangat nostalgic dan menyentuh! Aku suka banget melodi dan liriknya yang dalam. Kadang suka kudengarkan saat lagi santai atau butuh menenangkan pikiran. Lagu-lagu ballad 80-90an seperti ini punya kualitas yang timeless ya.",
+        "Without You itu salah satu lagu ballad terbaik menurutku. Air Supply emang jago banget bikin lagu yang mengena di hati. Aku sering dengerin lagu ini pas lagi me-time atau saat perjalanan panjang. Ada sentimen nostalgic yang bikin nyaman, meskipun aku lahir jauh setelah era lagu ini populer."
+    ],
+    "glenn fredly": [
+        "Glenn Fredly memang salah satu musisi Indonesia favoritku! Lagu 'Sekali Ini Saja' itu karya masterpiece-nya menurutku, liriknya dalam dan menggambarkan perasaan dengan sempurna. Suaranya yang khas dan aransemen musiknya selalu bikin baper. Sayang banget ya dia sudah meninggal, tapi lagunya akan selalu dikenang.",
+        "Aku penggemar berat Glenn Fredly, terutama lagu-lagu seperti 'Sekali Ini Saja' dan 'Januari'. Dia punya cara menyampaikan emosi lewat musik yang sangat kuat. Saat coding atau lagi butuh inspirasi, kadang aku putar album-albumnya. Musisi Indonesia yang benar-benar meninggalkan legacy besar di industri musik."
+    ],
+    "membaca": [
+        "Membaca novel memang jadi salah satu hobi yang paling menyenangkan! Aku suka genre fantasi seperti 'Omniscient Reader Viewpoint' yang alur ceritanya kompleks dan karakternya berkembang. Biasanya aku baca sebelum tidur atau di weekend saat istirahat dari coding. Ada rekomendasi novel yang menarik?",
+        "Hobi membaca itu memang menyegarkan pikiran ya. Aku suka novel fantasi dan fiksi ilmiah seperti 'Omniscient Reader'. Membaca juga membantuku mengembangkan kreativitas dan problem-solving yang berguna saat coding. Aku biasanya baca e-book di tablet atau kadang beli buku fisik jika benar-benar suka ceritanya."
+    ]
+}
+
+# ekstrak item-item untuk pengenalan konteks
 def extract_context_items():
     context_items = set()
     
-    # Makanan
+    # makanan
     for category, foods in user_profile["makanan_favorit"].items():
         context_items.update([food.lower() for food in foods])
     
-    # Lagu
+    # lagu
     for category, songs in user_profile["lagu_favorit"].items():
         for song in songs:
             parts = song.split('-')
             if len(parts) > 1:
-                # Tambahkan judul lagu dan artis
+                # tambahkan judul lagu dan artis
                 context_items.add(parts[0].strip().lower())
                 context_items.add(parts[1].strip().lower())
             else:
                 context_items.add(song.lower())
     
-    # Hobi
+    # hobi
     for hobi in user_profile["hobi"]:
         context_items.add(hobi.lower())
     for _, detail in user_profile["hobi_detail"].items():
         for word in detail.split():
-            if len(word) > 4:  # Hanya tambahkan kata yang cukup panjang
+            if len(word) > 4:  # hanya tambahkan kata yang cukup panjang
                 context_items.add(word.lower())
     
     return context_items
 
-# Daftar item konteks untuk pengecekan referensi
+# daftar item konteks untuk pengecekan referensi
 context_items = extract_context_items()
 
 # daftar keyword untuk pengenalan kategori
@@ -319,12 +356,13 @@ category_keywords = {
     ],
 }
 
-# Kata-kata untuk mendeteksi pertanyaan follow-up
+# kata-kata untuk mendeteksi pertanyaan follow-up
 follow_up_words = [
     "berarti", "jadi", "kalau begitu", "kenapa", "gimana", "lalu", "terus", 
     "lantas", "oh", "wow", "keren", "menarik", "mantap", "asik", "enak", "bagus",
     "oh ya", "oh iya", "selain itu", "selain", "tapi", "wah", "suka", "favorit",
-    "lebih", "paling", "banget"
+    "lebih", "paling", "banget", "emang", "emangnya", "memang", "memangnya", "kok",
+    "ya", "iya", "yup", "gitu", "gitu ya", "masa", "masa sih", "beneran"
 ]
 
 # fungsi untuk deteksi typo dan perbaikan kata
@@ -342,65 +380,115 @@ def preprocess_question(question: str) -> str:
     question = re.sub(r'\s+', ' ', question).strip()
     return question
 
-# Fungsi untuk mengecek apakah pertanyaan adalah follow-up dari konteks sebelumnya
+# fungsi untuk mengecek apakah pertanyaan adalah follow-up dari konteks sebelumnya (revisi)
 def is_follow_up_question(question: str, context: ConversationContext) -> bool:
     question = preprocess_question(question)
     
-    # Pertanyaan pendek (1-3 kata) kemungkinan besar adalah follow-up
+    # pertanyaan pendek (1-3 kata) kemungkinan besar adalah follow-up
     if len(question.split()) <= 3:
         return True
     
-    # Cek kata-kata penanda follow-up
-    if any(word in question for word in follow_up_words):
+    # cek kata-kata penanda follow-up
+    if any(re.search(r'\b' + re.escape(word) + r'\b', question) for word in follow_up_words):
         return True
     
-    # Cek referensi ke item yang disebutkan sebelumnya
+    # cek referensi ke item yang disebutkan sebelumnya
     if context.mentioned_items:
         for item in context.mentioned_items:
-            if item in question:
+            if re.search(r'\b' + re.escape(item) + r'\b', question):
                 return True
+    
+    # cek apakah pertanyaan mengandung pronoun tanpa subjek yang jelas
+    has_pronouns = re.search(r'\b(itu|ini|mereka|dia|nya|kamu|tersebut)\b', question)
+    if has_pronouns and len(context.questions_history) > 0:
+        return True
     
     return False
 
-# Fungsi untuk mendeteksi referensi ke item yang disebutkan sebelumnya
+# fungsi untuk mendeteksi referensi ke item yang disebutkan sebelumnya (revisi)
 def detect_item_references(question: str, context: ConversationContext) -> Optional[str]:
     question = preprocess_question(question)
     
-    # Cek apakah pertanyaan mereferensikan item yang disebutkan sebelumnya
+    # cek apakah pertanyaan mereferensikan item yang disebutkan sebelumnya
+    referenced_items = []
     for item in context.mentioned_items:
-        if item in question:
-            # Coba tentukan kategori item
-            if any(item in food for food in user_profile["makanan_favorit"]["street_food"]) or \
-               any(item in food for food in user_profile["makanan_favorit"]["restoran"]) or \
-               any(item in food for food in user_profile["makanan_favorit"]["camilan"]) or \
-               item in ["makanan", "street food", "kuliner", "makan"]:
+        if re.search(r'\b' + re.escape(item) + r'\b', question):
+            referenced_items.append(item)
+    
+    if referenced_items:
+        # coba tentukan kategori item berdasarkan item yang paling spesifik
+        for item in referenced_items:
+            # prioritas untuk item makanan spesifik
+            if item in ["ketoprak", "martabak", "sate", "gorengan", "batagor", "bakso", "nasi padang"]:
                 return "makanan_favorit"
             
-            elif any(item in song for songs in user_profile["lagu_favorit"].values() for song in songs) or \
-                 item in ["lagu", "musik", "dengerin", "artis", "band"]:
+            # prioritas untuk item musik spesifik
+            elif item in ["without you", "air supply", "glenn fredly", "sekali ini saja", "celine dion"]:
                 return "lagu_favorit"
             
-            elif item in ["membaca", "novel", "omniscient", "traveling", "destinasi"]:
+            # prioritas untuk item hobi spesifik
+            elif item in ["membaca", "novel", "omniscient reader", "traveling"]:
                 return "hobi"
+    
+        # backup: cek berdasarkan kategori umum
+        all_food_items = []
+        for foods in user_profile["makanan_favorit"].values():
+            all_food_items.extend([food.lower() for food in foods])
+        
+        for item in referenced_items:
+            if item in all_food_items or item in ["makanan", "street food", "kuliner", "makan"]:
+                return "makanan_favorit"
+            
+            for category, songs in user_profile["lagu_favorit"].items():
+                if any(item in song.lower() for song in songs):
+                    return "lagu_favorit"
+            
+            if item in ["lagu", "musik", "dengerin", "artis", "band"]:
+                return "lagu_favorit"
+    
+    # jika tidak ada item spesifik tapi pertanyaan sepertinya follow-up
+    if context.last_category and is_follow_up_question(question, context):
+        return context.last_category
     
     return None
 
-# fungsi untuk mengkategorikan pertanyaan yang lebih robust dengan konteks
+# fungsi untuk mengkategorikan pertanyaan yang lebih robust dengan konteks (revisi)
 def categorize_question(question: str, context: ConversationContext = None) -> str:
     original_question = question
     question = preprocess_question(question)
     question_words = question.split()
     
-    # Penanganan khusus untuk pertanyaan follow-up
+    # debugging log
+    logger.info(f"Processing question: {question}")
+    if context:
+        logger.info(f"Context - Last category: {context.last_category}")
+        logger.info(f"Context - Mentioned items: {context.mentioned_items}")
+    
+    # penanganan khusus untuk pertanyaan follow-up yang jelas mereferensikan item tertentu
+    if context and context.mentioned_items:
+        for item in specific_follow_up_responses.keys():
+            if re.search(r'\b' + re.escape(item) + r'\b', question) and item in context.mentioned_items:
+                logger.info(f"Detected specific follow-up about: {item}")
+                
+                # tentukan kategori berdasarkan item
+                if item in ["ketoprak", "martabak", "sate"]:
+                    return "makanan_favorit"
+                elif item in ["without you", "glenn fredly"]:
+                    return "lagu_favorit"
+                elif item in ["membaca"]:
+                    return "hobi"
+    
+    # penanganan follow-up question berdasarkan konteks sebelumnya
     if context and is_follow_up_question(question, context):
-        # Cek referensi ke item tertentu
+        # cek referensi ke item tertentu
         item_category = detect_item_references(question, context)
         if item_category:
+            logger.info(f"Detected item reference, category: {item_category}")
             return item_category
         
-        # Jika tidak ada referensi spesifik, gunakan kategori terakhir
+        # jika tidak ada referensi spesifik, gunakan kategori terakhir
         if context.last_category:
-            logger.info(f"Detected follow-up question. Using previous category: {context.last_category}")
+            logger.info(f"Using previous category for follow-up: {context.last_category}")
             return context.last_category
     
     # pengecekan kategori personal dulu
@@ -413,7 +501,7 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
     ]
     
     for keywords, category in personal_checks:
-        if any(keyword in question for keyword in keywords):
+        if any(re.search(r'\b' + re.escape(keyword) + r'\b', question) for keyword in keywords):
             return category
     
     # cek untuk kategori spesifik dengan fuzzy matching
@@ -424,15 +512,17 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
         matches = 0
         matched_words = []
         
-        # cek kata-kata eksak
+        # cek kata-kata eksak dengan word boundaries
         for word in question_words:
-            if word in keywords:
+            if any(re.search(r'\b' + re.escape(word) + r'\b', keyword) or 
+                   re.search(r'\b' + re.escape(keyword) + r'\b', word) 
+                   for keyword in keywords):
                 matches += 1
                 matched_words.append(word)
         
         # cek frasa lengkap
         for keyword in keywords:
-            if ' ' in keyword and keyword in question:
+            if ' ' in keyword and re.search(r'\b' + re.escape(keyword) + r'\b', question):
                 matches += 2  # berikan bobot lebih untuk frasa lengkap
                 matched_words.append(keyword)
         
@@ -444,14 +534,14 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
                     matches += 0.5  # bobot lebih rendah untuk fuzzy match
                     matched_words.append(word)
         
-        # Berikan bobot tambahan jika kategori sama dengan previous category (untuk continuity)
+        # berikan bobot tambahan jika kategori sama dengan previous category (untuk continuity)
         if context and context.last_category == category:
             matches += 1
         
-        # Cek apakah kategori ini berkaitan dengan item yang disebutkan sebelumnya
+        # cek apakah kategori ini berkaitan dengan item yang disebutkan sebelumnya
         if context and context.mentioned_items:
             for item in context.mentioned_items:
-                if item in keywords:
+                if any(re.search(r'\b' + re.escape(item) + r'\b', keyword) for keyword in keywords):
                     matches += 0.5
         
         word_category_counts[category] = matches
@@ -481,18 +571,20 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
     }
     
     for category, keywords in other_categories.items():
-        if any(keyword in question for keyword in keywords):
-            word_category_counts[category] = word_category_counts.get(category, 0) + 1
+        for keyword in keywords:
+            if re.search(r'\b' + re.escape(keyword) + r'\b', question):
+                word_category_counts[category] = word_category_counts.get(category, 0) + 1
     
     # pemeriksaan khusus untuk pendidikan
     education_keywords = ["pendidikan", "sekolah", "kuliah", "belajar", "kampus", "universitas", "itb", "masuk itb", "masuk kuliah", "jurusan"]
-    if any(keyword in question for keyword in education_keywords):
+    if any(re.search(r'\b' + re.escape(keyword) + r'\b', question) for keyword in education_keywords):
         return "pendidikan"
     
     # tentukan kategori dengan skor tertinggi
     if word_category_counts:
         top_category = max(word_category_counts.items(), key=lambda x: x[1])
         if top_category[1] > 0:  # pastikan minimal ada satu kecocokan
+            logger.info(f"Selected category with score: {top_category}")
             return top_category[0]
     
     # cek apakah pertanyaan kurang jelas
@@ -537,8 +629,27 @@ def create_context_aware_prompt(question: str, context: ConversationContext = No
         - Kategori terakhir dibahas: {context.last_category if context.last_category else "Belum ada"}
         - Item yang disebutkan sebelumnya: {', '.join(context.mentioned_items) if context.mentioned_items else "Belum ada"}
         - Pertanyaan sebelumnya: {context.questions_history[-1] if context.questions_history else "Belum ada"}
+        - Item yang direferensikan paling sering: {', '.join([item for item, count in context.get_most_referenced_items(2)]) if context.referenced_items else "Belum ada"}
         
         PENTING: Jika pertanyaan saat ini sepertinya mereferensikan atau follow-up dari percakapan sebelumnya, terutama jika ada referensi ke item yang disebutkan sebelumnya, pastikan untuk menjawab dalam konteks tersebut.
+        """
+    
+    # penanganan khusus untuk follow-up item spesifik
+    specific_item = None
+    if context and context.mentioned_items:
+        for item in specific_follow_up_responses.keys():
+            if re.search(r'\b' + re.escape(item) + r'\b', question.lower()) and item in context.mentioned_items:
+                specific_item = item
+                break
+    
+    if specific_item:
+        base_prompt += f"""
+        SANGAT PENTING: Pertanyaan ini jelas mereferensikan "{specific_item}" yang telah disebutkan sebelumnya.
+        Berikan respons yang fokus mendetail tentang "{specific_item}" dan tunjukkan pengetahuan spesifik tentang hal tersebut.
+        Berikut adalah beberapa contoh respons yang bisa dijadikan referensi:
+        {json.dumps(specific_follow_up_responses[specific_item], indent=2, ensure_ascii=False)}
+        
+        Silahkan gunakan konten tersebut sebagai inspirasi atau pilih salah satu respons yang paling relevan.
         """
     
     # jika pertanyaan tidak jelas, minta klarifikasi
@@ -792,18 +903,30 @@ def create_context_aware_prompt(question: str, context: ConversationContext = No
         PENTING: Fokuskan pada data science, bukan AI. Jika membahas keahlian atau proyek, tekankan Algoritma Pencarian Little Alchemy 2.
         """
     
-    # Instruksi spesifik berdasarkan jika pertanyaan adalah follow-up
+    # instruksi spesifik berdasarkan jika pertanyaan adalah follow-up
     if context and is_follow_up_question(question, context):
-        if category == "makanan_favorit" and "ketoprak" in question.lower():
+        if category == "makanan_favorit" and re.search(r'\bketoprak\b', question.lower()) and "ketoprak" in context.mentioned_items:
             base_prompt += f"""
             Pertanyaan pengguna adalah tentang ketoprak, salah satu street food favorit. Jelaskan pengalaman menikmati ketoprak, apa yang kamu suka dari ketoprak (rasanya, teksturnya, sausnya), di mana biasanya makan ketoprak, dan berikan detail personal tentang pengalaman makan ketoprak.
             
-            SANGAT PENTING: Jawab dengan antusias dan personal, fokus pada ketoprak sebagai makanan favorit.
+            SANGAT PENTING: Jawab dengan antusias dan personal, fokus pada ketoprak sebagai makanan favorit. Gunakan salah satu respons berikut atau kombinasi keduanya:
+            {json.dumps(specific_follow_up_responses["ketoprak"], indent=2, ensure_ascii=False)}
             """
-        elif any(item in question.lower() for item in context.mentioned_items):
-            base_prompt += f"""
-            Pertanyaan pengguna mereferensikan item yang disebutkan sebelumnya dalam percakapan. Pastikan jawabanmu mempertahankan konteks yang sama dan menjawab dengan detail tentang item tersebut. Jika sebelumnya kamu membahas makanan, tetap fokus pada makanan. Jika sebelumnya membahas musik, tetap fokus pada musik.
-            """
+        elif any(re.search(r'\b' + re.escape(item) + r'\b', question.lower()) for item in context.mentioned_items):
+            # cek jika item spesifik ada dalam respons khusus
+            for item, responses in specific_follow_up_responses.items():
+                if re.search(r'\b' + re.escape(item) + r'\b', question.lower()) and item in context.mentioned_items:
+                    base_prompt += f"""
+                    Pertanyaan pengguna jelas mereferensikan {item} yang disebutkan sebelumnya. Berikan respons yang spesifik dan detail tentang {item}, tunjukkan pengetahuan yang mendalam.
+                    
+                    SANGAT PENTING: Gunakan salah satu respons berikut sebagai referensi atau inspirasi:
+                    {json.dumps(responses, indent=2, ensure_ascii=False)}
+                    """
+                    break
+            else:
+                base_prompt += f"""
+                Pertanyaan pengguna mereferensikan item yang disebutkan sebelumnya dalam percakapan. Pastikan jawabanmu mempertahankan konteks yang sama dan menjawab dengan detail tentang item tersebut. Jika sebelumnya kamu membahas makanan, tetap fokus pada makanan. Jika sebelumnya membahas musik, tetap fokus pada musik.
+                """
     
     base_prompt += f"""
     Pertanyaan pengguna: {question}
@@ -816,6 +939,7 @@ def create_context_aware_prompt(question: str, context: ConversationContext = No
     - Jika pertanyaan tentang lagu atau musik, jawablah HANYA tentang lagu favorit dan jangan membahas hobi atau topik lain.
     - Jika pertanyaan tentang makanan, jawablah HANYA tentang makanan favorit terutama street food.
     - Jika pertanyaan follow-up dari topik sebelumnya, pertahankan konteks yang sama.
+    - Jika pertanyaan mereferensikan item tertentu (seperti ketoprak, tanpa you, dsb), pastikan responmu memberikan informasi spesifik tentang item tersebut.
     """
     
     return base_prompt
@@ -899,21 +1023,32 @@ async def ask_ai(request: QuestionRequest):
         # log pertanyaan
         logger.info(f"pertanyaan diterima: {request.question}")
         
-        # Dapatkan atau buat session ID
+        # dapatkan atau buat session ID
         session_id = request.session_id
         if not session_id:
             session_id = str(uuid.uuid4())
             logger.info(f"Created new session ID: {session_id}")
         
-        # Dapatkan atau inisialisasi context percakapan
+        # dapatkan atau inisialisasi context percakapan
         if session_id not in conversation_sessions:
             conversation_sessions[session_id] = ConversationContext()
         
         context = conversation_sessions[session_id]
         
-        # Tentukan kategori
+        # tentukan kategori
         category = categorize_question(request.question, context)
         logger.info(f"Kategori terdeteksi: {category}")
+        
+        # penanganan khusus untuk item yang spesifik
+        specific_item_response = None
+        if context and context.mentioned_items:
+            for item, responses in specific_follow_up_responses.items():
+                if re.search(r'\b' + re.escape(item) + r'\b', request.question.lower()) and item in context.mentioned_items:
+                    specific_item_response = random.choice(responses)
+                    logger.info(f"Menggunakan respons khusus untuk: {item}")
+                    # update konteks dengan interaksi ini
+                    context.update(category, request.question, specific_item_response)
+                    return AIResponse(response=specific_item_response, session_id=session_id)
         
         # membuat prompt yang lebih kontekstual
         prompt = create_context_aware_prompt(request.question, context)
@@ -923,7 +1058,7 @@ async def ask_ai(request: QuestionRequest):
             response_text = call_openai_api(prompt)
             logger.info("respons diterima dari openai")
             
-            # Update context with this interaction
+            # update context with this interaction
             context.update(category, request.question, response_text)
             
             return AIResponse(response=response_text, session_id=session_id)
@@ -943,12 +1078,12 @@ async def ask_ai(request: QuestionRequest):
 @app.post("/ask-mock", response_model=AIResponse)
 async def ask_ai_mock(request: QuestionRequest):
     try:
-        # Dapatkan atau buat session ID
+        # dapatkan atau buat session ID
         session_id = request.session_id
         if not session_id:
             session_id = str(uuid.uuid4())
         
-        # Dapatkan atau inisialisasi context percakapan
+        # dapatkan atau inisialisasi context percakapan
         if session_id not in conversation_sessions:
             conversation_sessions[session_id] = ConversationContext()
         
@@ -968,36 +1103,54 @@ async def ask_ai_mock(request: QuestionRequest):
             "Well, "
         ]
         
-        # Penanganan khusus untuk follow-up question mengenai item tertentu
+        # penanganan khusus untuk pertanyaan tentang item spesifik yang pernah disebutkan
+        if context and context.mentioned_items:
+            for item, responses in specific_follow_up_responses.items():
+                if re.search(r'\b' + re.escape(item) + r'\b', question.lower()) and item in context.mentioned_items:
+                    response = random.choice(responses)
+                    full_response = random.choice(pembuka) + response
+                    
+                    # update context
+                    context.update(category, question, full_response)
+                    
+                    return AIResponse(response=full_response, session_id=session_id)
+        
+        # penanganan khusus untuk follow-up question mengenai item tertentu
         if context and any(item in question.lower() for item in context.mentioned_items) and is_follow_up_question(question, context):
-            # Deteksi item yang direferensikan
+            # deteksi item yang direferensikan
             referenced_items = [item for item in context.mentioned_items if item in question.lower()]
             
             if referenced_items:
-                item = referenced_items[0]
+                for item in referenced_items:
+                    # update item reference count
+                    context.referenced_items[item] += 1
                 
-                # Special case for ketoprak
-                if item == "ketoprak":
+                # untuk item yang tidak memiliki respons khusus tapi direferensikan
+                if category == "makanan_favorit":
                     responses = [
-                        f"Yup, aku emang suka banget ketoprak! Itu salah satu street food favoritku karena perpaduan antara lontong, tahu, bihun, dengan bumbu kacang yang gurih dan tauge segar. Di Jakarta ada beberapa spot ketoprak enak yang jadi langgananku, terutama di daerah Pasar Minggu yang punya racikan bumbu kacang super enak dengan tingkat kepedasan yang bisa disesuaikan.",
-                        f"Ketoprak itu beneran salah satu makanan favorit aku! Aku suka banget sama tekstur lontongnya yang lembut, tahu yang gurih, dan sausnya yang creamy dari kacang. Biasanya aku makan ketoprak di area kampus atau di food court mal kalau lagi jalan-jalan. Ada sensasi tersendiri melihat penjualnya menyiapkan ketoprak fresh di depan mata.",
-                        f"Iya, ketoprak emang enak banget! Aku suka kombinasi rasa manis, asin, dan sedikit asam dari bumbunya, ditambah kecap dan taburan bawang goreng yang bikin makin sedap. Di Jakarta, aku punya beberapa tempat favorit yang jadi langganan, terutama yang masih authentic, bukan yang di restoran. Kalau kamu suka ketoprak juga, coba cari yang pakai kerupuk kuning dan ditambah telor, itu lebih mantap!"
+                        f"Soal makanan street food Indonesia, aku memang penggemarnya! Dari martabak, sate, gorengan, hingga ketoprak, semuanya enak. Di Jakarta banyak spot street food menarik yang sering kujelajahi saat malam hari. Menurutku street food Indonesia itu unik dengan bumbu-bumbu kompleks tapi harga tetap terjangkau.",
+                        f"Street food Indonesia memang juara! Mau itu martabak manis dengan toppingnya yang melimpah, sate ayam dengan bumbu kacangnya yang gurih, atau ketoprak dengan tekstur lontongnya yang pas, semuanya bikin nagih. Aku paling suka jelajah street food di sekitar Jakarta, dan kadang sambil coding marathon."
                     ]
                     response = random.choice(responses)
                     full_response = random.choice(pembuka) + response
                     
-                    # Update context
+                    # update context
                     context.update(category, question, full_response)
                     
                     return AIResponse(response=full_response, session_id=session_id)
                 
-                # For other referenced items
-                elif item in ["lagu", "musik", "dengerin", "air supply", "without you", "glenn fredly", "sekali ini saja"]:
-                    category = "lagu_favorit"
-                elif item in ["makanan", "street food", "martabak", "sate", "gorengan", "batagor"]:
-                    category = "makanan_favorit"
-                elif item in ["membaca", "novel", "omniscient", "traveling"]:
-                    category = "hobi"
+                elif category == "lagu_favorit":
+                    responses = [
+                        f"Tentang lagu favorit, aku memang suka banget lagu-lagu ballad seperti 'Without You' dari Air Supply atau 'Sekali Ini Saja' dari Glenn Fredly. Ada sesuatu dari melodinya yang bikin nyaman dan liriknya yang mengena. Kalau lagi coding, biasanya aku lebih suka dengerin lo-fi beats atau soundtrack film yang nggak terlalu mengganggu konsentrasi.",
+                        f"Untuk musik, seleraku cukup beragam! Dari lagu Indonesia seperti 'Sekali Ini Saja' Glenn Fredly sampai lagu barat seperti 'Without You' Air Supply. Genre favoritku adalah pop 90an dan ballad yang liriknya dalam. Saat ngoding, playlist lo-fi atau instrumental jadi pilihan utama biar tetap fokus."
+                    ]
+                    response = random.choice(responses)
+                    full_response = random.choice(pembuka) + response
+                    
+                    # update context
+                    context.update(category, question, full_response)
+                    
+                    return AIResponse(response=full_response, session_id=session_id)
         
         # jika pertanyaan tidak jelas, minta klarifikasi
         if category == "unclear_question":
