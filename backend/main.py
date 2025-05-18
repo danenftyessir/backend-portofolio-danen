@@ -18,15 +18,12 @@ from collections import defaultdict
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# memuat variabel lingkungan
 load_dotenv()
 
-# inisialisasi aplikasi
 app = FastAPI(title="AI Portfolio Backend")
 
 frontend_url = os.getenv("FRONTEND_URL", "https://frontend-portofolio-danen.vercel.app")
 
-# split dan bersihkan urls
 allowed_origins = []
 if frontend_url:
     for url in frontend_url.split(','):
@@ -34,7 +31,6 @@ if frontend_url:
         if url:
             allowed_origins.append(url)
 
-# tambahkan url tambahan yang diperlukan
 additional_origins = [
     "http://localhost:3000",
     "https://frontend-portofolio-danen.vercel.app",
@@ -46,7 +42,6 @@ for origin in additional_origins:
     if origin not in allowed_origins:
         allowed_origins.append(origin)
 
-# tambahkan CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -55,17 +50,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# model untuk request
 class QuestionRequest(BaseModel):
     question: str
     session_id: Optional[str] = None
 
-# model untuk response
 class AIResponse(BaseModel):
     response: str
     session_id: str
 
-# struktur session untuk konteks percakapan (revisi)
 class ConversationContext:
     def __init__(self):
         self.last_category: Optional[str] = None
@@ -74,8 +66,9 @@ class ConversationContext:
         self.questions_history: List[str] = []
         self.last_updated: float = time.time()
         self.referenced_items: Dict[str, int] = defaultdict(int)
-        self.conversation_topics: List[str] = []  # track topik percakapan
-        self.potential_followups: Dict[str, List[str]] = {}  # simpan kemungkinan followup
+        self.conversation_topics: List[str] = []
+        self.potential_followups: Dict[str, List[str]] = {}
+        self.conversation_tone: str = "neutral"  # track tone dari conversation
     
     def update(self, category: str, question: str, response: str = None):
         self.last_category = category
@@ -85,31 +78,44 @@ class ConversationContext:
             self.previous_responses.append(response)
             self.extract_mentioned_items(response)
             
-            # tambahkan topik percakapan
             if category not in ["unclear_question", "general"]:
                 self.conversation_topics.append(category)
                 
-            # generate potential follow-up questions
             self.generate_potential_followups(category, question, response)
         
-        # track item yang direferensikan dalam pertanyaan
+        # detect tone dari pertanyaan
+        self.detect_conversation_tone(question)
+        
         for item in self.mentioned_items:
             if re.search(r'\b' + re.escape(item) + r'\b', question.lower()):
                 self.referenced_items[item] += 1
         
         self.last_updated = time.time()
     
+    def detect_conversation_tone(self, question: str):
+        # deteksi tone conversation untuk adjustment response
+        question_lower = question.lower()
+        
+        # tone categories
+        if any(word in question_lower for word in ["kenapa", "mengapa", "gimana", "bagaimana", "kok", "masa"]):
+            self.conversation_tone = "inquisitive"
+        elif any(word in question_lower for word in ["wah", "wow", "keren", "mantap", "bagus"]):
+            self.conversation_tone = "positive"
+        elif any(word in question_lower for word in ["cukup", "hanya", "saja", "doang", "emang", "yakin"]):
+            self.conversation_tone = "challenging"
+        elif any(word in question_lower for word in ["bisa", "tolong", "help", "bantu"]):
+            self.conversation_tone = "seeking_help"
+        else:
+            self.conversation_tone = "neutral"
+    
     def extract_mentioned_items(self, response: str):
         # ekstrak item-item penting yang disebutkan dalam respons
-        
-        # ekstrak makanan yang disebutkan
         food_patterns = [
             r'\b(martabak|sate|gorengan|ketoprak|batagor|nasi padang|soto|bakso|keripik|cimol|basreng)\b',
             r'street food (\w+)',
             r'makanan (\w+)'
         ]
         
-        # ekstrak lagu/artis yang disebutkan
         music_patterns = [
             r'\b(without you|air supply|glenn fredly|sekali ini saja|noah|separuh aku|celine dion|my heart will go on)\b',
             r'lagu "([^"]+)"',
@@ -117,13 +123,11 @@ class ConversationContext:
             r'\b(lo-fi|instrumental|soundtrack)\b'
         ]
         
-        # ekstrak hobi yang disebutkan
         hobby_patterns = [
             r'\b(membaca|novel|omniscient reader|street food|traveling|wisata|destinasi)\b',
             r'hobi ([a-zA-Z\s]+)'
         ]
         
-        # ekstrak skill/teknologi yang disebutkan
         tech_patterns = [
             r'\b(python|next\.js|react|data science|java|tailwind|typescript|fastapi|machine learning|pandas)\b',
             r'bahasa (\w+)',
@@ -144,8 +148,6 @@ class ConversationContext:
                         self.mentioned_items.add(match.strip())
                         
     def generate_potential_followups(self, category: str, question: str, response: str):
-        # generate kemungkinan follow-up questions berdasarkan kategori dan respons
-        
         followups = {
             "makanan_favorit": [
                 "Kenapa kamu suka {item}?",
@@ -184,13 +186,11 @@ class ConversationContext:
             ]
         }
         
-        # deteksi item-item yang disebutkan dalam response
         items_in_response = []
         for item in self.mentioned_items:
             if item in response.lower():
                 items_in_response.append(item)
                 
-        # untuk kategori yang ada di daftar followups, generate pertanyaan lanjutan
         if category in followups and items_in_response:
             potential_questions = []
             for item in items_in_response:
@@ -199,34 +199,27 @@ class ConversationContext:
                         if '{item}' in template:
                             potential_questions.append(template.format(item=item))
                         elif '{artist}' in template and category == "lagu_favorit":
-                            # coba temukan artist dari item
                             artist_match = re.search(r'(.+) dari (.+)', response.lower())
                             if artist_match:
                                 artist = artist_match.group(2).strip()
                                 potential_questions.append(template.format(artist=artist))
                     except:
-                        # skip jika format gagal
                         continue
                         
-            # simpan potential followups
             if potential_questions:
-                self.potential_followups[category] = potential_questions[:5]  # batasi 5 kemungkinan
+                self.potential_followups[category] = potential_questions[:5]
 
     def get_most_referenced_items(self, limit=3):
-        # mendapatkan item yang paling sering direferensikan
         return sorted(self.referenced_items.items(), key=lambda x: x[1], reverse=True)[:limit]
     
     def get_suggested_followup_questions(self, limit=3):
-        # dapatkan suggested followup questions berdasarkan kategori percakapan terakhir
         if not self.last_category or self.last_category not in self.potential_followups:
             return []
             
         return self.potential_followups[self.last_category][:limit]
 
-# penyimpanan session percakapan
 conversation_sessions = {}
 
-# cleanup sessions yang tidak aktif (lebih dari 30 menit)
 def cleanup_old_sessions():
     current_time = time.time()
     sessions_to_remove = []
@@ -304,7 +297,7 @@ user_profile = {
     },
     "prestasi": [
         "Juara 2 Hackathon Nasional 2022",
-        "Asisten praktikum Algoritma dan Struktur Data",
+        "Asisten praktikum Berpikir Komputasional",
         "Kontributor open source di beberapa proyek React"
     ],
     "lomba": {
@@ -350,47 +343,15 @@ user_profile = {
     }
 }
 
-# konten khusus untuk pertanyaan follow-up
-specific_follow_up_responses = {
-    "ketoprak": [
-        "Yup, ketoprak emang enak banget! Aku suka kombinasi lontong, tahu, dan bumbu kacang yang gurihnya pas. Di Jakarta ada beberapa spot ketoprak legendaris yang jadi langgananku, terutama yang bumbunya masih authentic. Tekstur dan rasanya benar-benar bikin ketagihan, apalagi kalau lagi coding marathon!",
-        "Iya dong, ketoprak itu salah satu street food favoritku! Aku suka banget sama tekstur lontongnya yang lembut, tahu yang gurih, dan sausnya yang creamy dari kacang. Ada sensasi tersendiri melihat penjualnya menyiapkan ketoprak fresh di depan mata. Biasanya aku tambah kerupuk dan bawang goreng biar makin mantap.",
-        "Ketoprak itu beneran enak banget! Aku suka kombinasi rasa manis, asin, dan sedikit asam dari bumbunya, ditambah kecap dan taburan bawang goreng yang bikin makin sedap. Di Jakarta, aku punya beberapa tempat favorit yang jadi langganan. Kalau kamu suka ketoprak juga, coba cari yang pakai kerupuk kuning dan ditambah telor, itu lebih mantap!"
-    ],
-    "martabak": [
-        "Martabak itu memang juara sih! Aku suka martabak manis yang topping-nya full, mulai dari coklat, keju, kacang, hingga susu. Tekstur pinggirnya yang kriuk dan tengahnya yang lembut itu kombinasi sempurna. Kalau di Jakarta, ada beberapa spot martabak legendaris yang selalu rame sampai tengah malam.",
-        "Martabak emang jadi comfort food favoritku. Aku lebih suka yang manis dengan kombinasi coklat-keju, apalagi kalau masih anget dan lumer. Kadang juga suka martabak telur yang garing di luar tapi tetap juicy di dalam. Paling enak dimakan bareng teman sambil ngobrol santai atau saat coding marathon."
-    ],
-    "sate": [
-        "Sate ayam itu salah satu street food Indonesia terbaik! Aku suka banget sensasi daging ayam yang empuk dan bumbu kacang yang creamy dengan sentuhan kecap manis. Biasanya aku makan sate di daerah Sabang atau Senayan yang terkenal enak. Apalagi kalau ditambah lontong dan acar, sempurna deh!",
-        "Sate emang makanan yang selalu bikin nagih. Aku suka sate ayam dengan bumbu kacang kental dan sedikit pedas. Proses pembakarannya yang bikin aroma khasnya itu loh yang bikin lapar. Kadang aku juga suka sate kambing atau sate padang yang bumbunya berbeda tapi sama-sama enak."
-    ],
-    "without you": [
-        "Without You dari Air Supply itu memang lagu yang sangat nostalgic dan menyentuh! Aku suka banget melodi dan liriknya yang dalam. Kadang suka kudengarkan saat lagi santai atau butuh menenangkan pikiran. Lagu-lagu ballad 80-90an seperti ini punya kualitas yang timeless ya.",
-        "Without You itu salah satu lagu ballad terbaik menurutku. Air Supply emang jago banget bikin lagu yang mengena di hati. Aku sering dengerin lagu ini pas lagi me-time atau saat perjalanan panjang. Ada sentimen nostalgic yang bikin nyaman, meskipun aku lahir jauh setelah era lagu ini populer."
-    ],
-    "glenn fredly": [
-        "Glenn Fredly memang salah satu musisi Indonesia favoritku! Lagu 'Sekali Ini Saja' itu karya masterpiece-nya menurutku, liriknya dalam dan menggambarkan perasaan dengan sempurna. Suaranya yang khas dan aransemen musiknya selalu bikin baper. Sayang banget ya dia sudah meninggal, tapi lagunya akan selalu dikenang.",
-        "Aku penggemar berat Glenn Fredly, terutama lagu-lagu seperti 'Sekali Ini Saja' dan 'Januari'. Dia punya cara menyampaikan emosi lewat musik yang sangat kuat. Saat coding atau lagi butuh inspirasi, kadang aku putar album-albumnya. Musisi Indonesia yang benar-benar meninggalkan legacy besar di industri musik."
-    ],
-    "membaca": [
-        "Membaca novel memang jadi salah satu hobi yang paling menyenangkan! Aku suka genre fantasi seperti 'Omniscient Reader Viewpoint' yang alur ceritanya kompleks dan karakternya berkembang. Biasanya aku baca sebelum tidur atau di weekend saat istirahat dari coding. Ada rekomendasi novel yang menarik?",
-        "Hobi membaca itu memang menyegarkan pikiran ya. Aku suka novel fantasi dan fiksi ilmiah seperti 'Omniscient Reader'. Membaca juga membantuku mengembangkan kreativitas dan problem-solving yang berguna saat coding. Aku biasanya baca e-book di tablet atau kadang beli buku fisik jika benar-benar suka ceritanya."
-    ]
-}
-
 # fungsi untuk mengecek apakah input adalah gibberish (teks tidak masuk akal)
 def is_gibberish(text: str) -> bool:
-    # cek apakah input terlalu pendek dan tidak masuk akal
     if len(text) < 3:
-        return False  # terlalu pendek untuk dianggap gibberish
+        return False
         
-    # hitung rasio konsonan berturut-turut
     text = text.lower()
     consonants = "bcdfghjklmnpqrstvwxyz"
     vowels = "aeiou"
     
-    # hitung berapa banyak konsonan berturut-turut
     max_consecutive_consonants = 0
     current_consonants = 0
     
@@ -401,30 +362,25 @@ def is_gibberish(text: str) -> bool:
         else:
             current_consonants = 0
     
-    # hitung entropy (keacakan) kata
     char_counts = {}
     for char in text:
         if char.isalpha():
             char_counts[char] = char_counts.get(char, 0) + 1
     
-    # jika konsonan berturut-turut terlalu banyak atau terlalu sedikit vokal
     vowel_count = sum(char_counts.get(v, 0) for v in vowels)
     total_chars = sum(char_counts.values())
     
-    # pola deteksi gibberish
-    if max_consecutive_consonants >= 4:  # terlalu banyak konsonan berturut-turut
+    if max_consecutive_consonants >= 4:
         return True
     
-    if total_chars > 0 and vowel_count / total_chars < 0.1:  # terlalu sedikit vokal
+    if total_chars > 0 and vowel_count / total_chars < 0.1:
         return True
     
-    # deteksi pola berulang yang tidak masuk akal (seperti 'asdasdasd')
     for length in range(2, min(5, len(text) // 2 + 1)):
         for start in range(len(text) - length * 2 + 1):
             if text[start:start+length] == text[start+length:start+length*2]:
                 return True
     
-    # cek word coherence (apakah ada kata yang masuk akal)
     words = text.split()
     valid_words = set([
         "hai", "halo", "apa", "siapa", "kenapa", "dimana", "kapan", "bagaimana", "mengapa",
@@ -436,48 +392,71 @@ def is_gibberish(text: str) -> bool:
         "data", "science", "python", "react", "javascript", "java", "next", "nextjs"
     ])
     
-    # hitung berapa kata yang masuk akal
     valid_word_count = sum(1 for word in words if word.lower() in valid_words)
     
-    # jika tidak ada kata yang masuk akal dan lebih dari 2 kata
     if len(words) > 2 and valid_word_count == 0:
         return True
         
     return False
 
-# fungsi untuk ekstrak context items
-def extract_context_items():
-    context_items = set()
+# fungsi untuk mendeteksi intent/sentiment dari pertanyaan
+def detect_question_intent(question: str, context: ConversationContext = None) -> str:
+    question_lower = question.lower()
     
-    # makanan
-    for category, foods in user_profile["makanan_favorit"].items():
-        context_items.update([food.lower() for food in foods])
+    # challenging questions (mempertanyakan kemampuan)
+    challenging_patterns = [
+        r'kenapa (?:saya|aku) harus',
+        r'apa (?:yang )?membuat (?:kamu|anda)',
+        r'(?:emang|memang|masa) (?:cukup|bisa)',
+        r'(?:yakin|serius) (?:bisa|mampu)',
+        r'hanya|cuma|saja|doang',
+        r'(?:gak|tidak|nggak) (?:cukup|bisa)',
+    ]
     
-    # lagu
-    for category, songs in user_profile["lagu_favorit"].items():
-        for song in songs:
-            parts = song.split('-')
-            if len(parts) > 1:
-                # tambahkan judul lagu dan artis
-                context_items.add(parts[0].strip().lower())
-                context_items.add(parts[1].strip().lower())
-            else:
-                context_items.add(song.lower())
+    # reflective questions (minta pendapat/analisis)
+    reflective_patterns = [
+        r'(?:gimana|bagaimana) (?:menurutmu|pendapatmu)',
+        r'kamu (?:rasa|pikir|anggap)',
+        r'menurut (?:kamu|anda)',
+        r'apa (?:pendapat|opini)',
+    ]
     
-    # hobi
-    for hobi in user_profile["hobi"]:
-        context_items.add(hobi.lower())
-    for _, detail in user_profile["hobi_detail"].items():
-        for word in detail.split():
-            if len(word) > 4:  # hanya tambahkan kata yang cukup panjang
-                context_items.add(word.lower())
+    # comparison questions (membandingkan)
+    comparison_patterns = [
+        r'(?:dibanding|dibandingkan)',
+        r'lebih (?:baik|bagus)',
+        r'versus|vs',
+        r'mana yang',
+    ]
     
-    return context_items
+    # follow up questions
+    followup_patterns = [
+        r'(?:terus|lalu|kemudian)',
+        r'(?:selain|kecuali) (?:itu|dari)',
+        r'balik ke',
+        r'kembali ke',
+        r'oh (?:gitu|begitu)',
+    ]
+    
+    for pattern in challenging_patterns:
+        if re.search(pattern, question_lower):
+            return "challenging"
+    
+    for pattern in reflective_patterns:
+        if re.search(pattern, question_lower):
+            return "reflective"
+    
+    for pattern in comparison_patterns:
+        if re.search(pattern, question_lower):
+            return "comparison"
+    
+    for pattern in followup_patterns:
+        if re.search(pattern, question_lower):
+            return "followup"
+    
+    return "neutral"
 
-# daftar item konteks untuk pengecekan referensi
-context_items = extract_context_items()
-
-# daftar keyword untuk pengenalan kategori
+# categories keywords untuk deteksi yang lebih nuanced
 category_keywords = {
     "lagu_favorit": [
         "lagu", "musik", "dengerin", "dengarkan", "nyanyi", "penyanyi", "band", "playlist",
@@ -510,179 +489,23 @@ category_keywords = {
         "terbaik", "unggulan", "kerjaan", "hasil", "pencapaian", "showcase", "demo", "showcase",
         "alchemy", "rush hour", "puzzle", "algoritma", "finance tracker"
     ],
+    "rekrutmen": [
+        "rekrut", "hire", "merekrut", "tim", "team", "kerja sama", "bergabung",
+        "harus merekrut", "kenapa harus", "mengapa memilih", "apa yang membuat"
+    ]
 }
 
-# kata-kata untuk mendeteksi pertanyaan follow-up
-follow_up_words = [
-    "berarti", "jadi", "kalau begitu", "kenapa", "gimana", "lalu", "terus", 
-    "lantas", "oh", "wow", "keren", "menarik", "mantap", "asik", "enak", "bagus",
-    "oh ya", "oh iya", "selain itu", "selain", "tapi", "wah", "suka", "favorit",
-    "lebih", "paling", "banget", "emang", "emangnya", "memang", "memangnya", "kok",
-    "ya", "iya", "yup", "gitu", "gitu ya", "masa", "masa sih", "beneran", "serius",
-    "juga", "sama", "terus", "lalu", "habis itu", "maksudnya", "seperti apa"
-]
-
-# fungsi untuk mengecek apakah pertanyaan adalah follow-up dari konteks sebelumnya (revisi)
-def is_follow_up_question(question: str, context: ConversationContext) -> bool:
-    question = question.lower()
-    
-    # pertanyaan pendek (1-3 kata) kemungkinan besar adalah follow-up
-    if len(question.split()) <= 3:
-        return True
-    
-    # cek kata-kata penanda follow-up
-    if any(re.search(r'\b' + re.escape(word) + r'\b', question) for word in follow_up_words):
-        return True
-    
-    # cek referensi ke item yang disebutkan sebelumnya
-    if context.mentioned_items:
-        for item in context.mentioned_items:
-            if re.search(r'\b' + re.escape(item) + r'\b', question):
-                return True
-    
-    # cek apakah pertanyaan mengandung pronoun tanpa subjek yang jelas
-    has_pronouns = re.search(r'\b(itu|ini|mereka|dia|nya|kamu|tersebut)\b', question)
-    if has_pronouns and len(context.questions_history) > 0:
-        return True
-    
-    return False
-
-# fungsi untuk mendeteksi referensi ke item yang disebutkan sebelumnya (revisi)
-def detect_item_references(question: str, context: ConversationContext) -> Optional[str]:
-    question = question.lower()
-    
-    # cek apakah pertanyaan mereferensikan item yang disebutkan sebelumnya
-    referenced_items = []
-    for item in context.mentioned_items:
-        if re.search(r'\b' + re.escape(item) + r'\b', question):
-            referenced_items.append(item)
-    
-    if referenced_items:
-        # coba tentukan kategori item berdasarkan item yang paling spesifik
-        for item in referenced_items:
-            # prioritas untuk item makanan spesifik
-            if item in ["ketoprak", "martabak", "sate", "gorengan", "batagor", "bakso", "nasi padang"]:
-                return "makanan_favorit"
-            
-            # prioritas untuk item musik spesifik
-            elif item in ["without you", "air supply", "glenn fredly", "sekali ini saja", "celine dion"]:
-                return "lagu_favorit"
-            
-            # prioritas untuk item hobi spesifik
-            elif item in ["membaca", "novel", "omniscient reader", "traveling"]:
-                return "hobi"
-            
-            # prioritas untuk item teknologi/keahlian spesifik
-            elif item in ["python", "next.js", "react", "data science", "java", "coding"]:
-                return "keahlian"
-    
-        # backup: cek berdasarkan kategori umum
-        all_food_items = []
-        for foods in user_profile["makanan_favorit"].values():
-            all_food_items.extend([food.lower() for food in foods])
-        
-        for item in referenced_items:
-            if item in all_food_items or item in ["makanan", "street food", "kuliner", "makan"]:
-                return "makanan_favorit"
-            
-            for category, songs in user_profile["lagu_favorit"].items():
-                if any(item in song.lower() for song in songs):
-                    return "lagu_favorit"
-            
-            if item in ["lagu", "musik", "dengerin", "artis", "band"]:
-                return "lagu_favorit"
-    
-    # jika tidak ada item spesifik tapi pertanyaan sepertinya follow-up
-    if context.last_category and is_follow_up_question(question, context):
-        return context.last_category
-    
-    return None
-
-# fungsi untuk deteksi typo dan perbaikan kata
-def fuzzy_match(word: str, word_list: List[str], threshold: float = 0.75) -> Optional[str]:
-    matches = difflib.get_close_matches(word.lower(), word_list, n=1, cutoff=threshold)
-    return matches[0] if matches else None
-
-# preprocessing pertanyaan
 def preprocess_question(question: str) -> str:
-    # lowercase
     question = question.lower()
-    # hapus karakter khusus
     question = re.sub(r'[^\w\s]', ' ', question)
-    # normalisasi spasi
     question = re.sub(r'\s+', ' ', question).strip()
     return question
 
-# fuzzy category detection untuk typo dalam kategori
-def fuzzy_category_detection(question: str) -> Tuple[Optional[str], float]:
-    question = preprocess_question(question)
-    
-    # daftar kategori yang dicari
-    category_terms = {
-        "makanan": "makanan_favorit",
-        "makanan favorit": "makanan_favorit",
-        "street food": "makanan_favorit",
-        "kuliner": "makanan_favorit",
-        "martabak": "makanan_favorit",
-        "sate": "makanan_favorit",
-        "ketoprak": "makanan_favorit",
-        
-        "lagu": "lagu_favorit",
-        "musik": "lagu_favorit",
-        "lagu favorit": "lagu_favorit",
-        "dengar musik": "lagu_favorit",
-        "dengerin musik": "lagu_favorit",
-        "playlist": "lagu_favorit",
-        
-        "hobi": "hobi",
-        "hobi favorit": "hobi",
-        "kegiatan": "hobi",
-        "membaca": "hobi",
-        "novel": "hobi",
-        "traveling": "hobi",
-        
-        "keahlian": "keahlian",
-        "skill": "keahlian",
-        "bisa apa": "keahlian",
-        "kemampuan": "keahlian",
-        "coding": "keahlian",
-        "programming": "keahlian",
-        
-        "proyek": "proyek",
-        "project": "proyek",
-        "karya": "proyek",
-        "aplikasi": "proyek",
-        "portofolio": "proyek",
-        "portfolio": "proyek"
-    }
-    
-    best_match = None
-    highest_score = 0.0
-    
-    # cek setiap term dengan fuzzy matching
-    for term, category in category_terms.items():
-        if term in question:
-            return category, 1.0  # exact match
-            
-        # cek fuzzy match
-        words = question.split()
-        for word in words:
-            if len(word) >= 3:  # hanya pertimbangkan kata yang cukup panjang
-                similarity = difflib.SequenceMatcher(None, word, term).ratio()
-                if similarity > 0.8 and similarity > highest_score:  # threshold tinggi untuk term pendek
-                    highest_score = similarity
-                    best_match = category
-    
-    return best_match, highest_score
-
-# mengkategorikan pertanyaan yang lebih robust dengan konteks (revisi)
 def categorize_question(question: str, context: ConversationContext = None) -> str:
-    # preprocessing pertanyaan
     original_question = question
     question = preprocess_question(question)
     question_words = question.split()
     
-    # debugging log
     logger.info(f"Processing question: {question}")
     if context:
         logger.info(f"Context - Last category: {context.last_category}")
@@ -692,39 +515,39 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
     if is_gibberish(question):
         logger.info(f"Detected gibberish: {question}")
         return "gibberish"
-        
-    # fuzzy category detection untuk typo dalam kategori
-    fuzzy_category, score = fuzzy_category_detection(question)
-    if fuzzy_category and score > 0.8:
-        logger.info(f"Detected category via fuzzy matching: {fuzzy_category} (score: {score})")
-        return fuzzy_category
     
-    # penanganan khusus untuk pertanyaan follow-up yang jelas mereferensikan item tertentu
-    if context and context.mentioned_items:
-        for item in specific_follow_up_responses.keys():
-            if re.search(r'\b' + re.escape(item) + r'\b', question) and item in context.mentioned_items:
-                logger.info(f"Detected specific follow-up about: {item}")
-                
-                # tentukan kategori berdasarkan item
-                if item in ["ketoprak", "martabak", "sate"]:
-                    return "makanan_favorit"
-                elif item in ["without you", "glenn fredly"]:
-                    return "lagu_favorit"
-                elif item in ["membaca"]:
-                    return "hobi"
+    # deteksi pertanyaan khusus rekrutmen/hiring
+    recruitment_patterns = [
+        r'kenapa (?:saya|aku) harus (?:merekrut|hire)',
+        r'apa (?:yang )?membuat (?:kamu|anda) (?:cocok|layak)',
+        r'mengapa (?:memilih|pilih) (?:kamu|anda)',
+        r'(?:keunggulan|kelebihan) (?:kamu|anda)',
+        r'tim (?:data|ml|machine learning)',
+        r'(?:hire|rekrut) (?:kamu|anda)'
+    ]
     
-    # penanganan follow-up question berdasarkan konteks sebelumnya
-    if context and is_follow_up_question(question, context):
-        # cek referensi ke item tertentu
-        item_category = detect_item_references(question, context)
-        if item_category:
-            logger.info(f"Detected item reference, category: {item_category}")
-            return item_category
+    for pattern in recruitment_patterns:
+        if re.search(pattern, question):
+            return "rekrutmen"
+    
+    # deteksi follow-up dengan referensi ke percakapan sebelumnya
+    if context and context.questions_history:
+        followup_patterns = [
+            r'balik ke (?:sebelumnya|tadi)',
+            r'kembali ke (?:pertanyaan|topik) (?:sebelumnya|tadi)',
+            r'(?:lanjutan|kelanjutan) dari',
+            r'(?:terus|lalu) (?:gimana|bagaimana)',
+            r'(?:emang|memang) (?:cukup|bisa)',
+            r'(?:yakin|serius) (?:gak|tidak)',
+            r'hanya (?:dengan|pakai)',
+            r'cuma (?:dengan|pakai)',
+        ]
         
-        # jika tidak ada referensi spesifik, gunakan kategori terakhir
-        if context.last_category:
-            logger.info(f"Using previous category for follow-up: {context.last_category}")
-            return context.last_category
+        for pattern in followup_patterns:
+            if re.search(pattern, question):
+                # gunakan kategori sebelumnya atau deteksi berdasarkan konten
+                if context.last_category:
+                    return context.last_category + "_followup"
     
     # pengecekan kategori personal dulu
     personal_checks = [
@@ -739,15 +562,14 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
         if any(re.search(r'\b' + re.escape(keyword) + r'\b', question) for keyword in keywords):
             return category
     
-    # cek untuk kategori spesifik dengan fuzzy matching
+    # cek untuk kategori spesifik
     word_category_counts = {}
     
-    # hitung berapa kata dari pertanyaan yang cocok dengan setiap kategori
     for category, keywords in category_keywords.items():
         matches = 0
         matched_words = []
         
-        # cek kata-kata eksak dengan word boundaries
+        # cek kata-kata eksak
         for word in question_words:
             if any(re.search(r'\b' + re.escape(word) + r'\b', keyword) or 
                    re.search(r'\b' + re.escape(keyword) + r'\b', word) 
@@ -758,18 +580,10 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
         # cek frasa lengkap
         for keyword in keywords:
             if ' ' in keyword and re.search(r'\b' + re.escape(keyword) + r'\b', question):
-                matches += 2  # berikan bobot lebih untuk frasa lengkap
+                matches += 2
                 matched_words.append(keyword)
         
-        # cek fuzzy matching untuk kata yang belum cocok
-        for word in question_words:
-            if word not in matched_words and len(word) > 3:
-                match = fuzzy_match(word, keywords)
-                if match:
-                    matches += 0.5  # bobot lebih rendah untuk fuzzy match
-                    matched_words.append(word)
-        
-        # berikan bobot tambahan jika kategori sama dengan previous category (untuk continuity)
+        # berikan bobot tambahan jika kategori sama dengan previous category
         if context and context.last_category == category:
             matches += 1
         
@@ -781,7 +595,7 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
         
         word_category_counts[category] = matches
     
-    # tambahkan kategori lain dengan definisi manual
+    # tambahkan kategori lain
     other_categories = {
         "mata_kuliah": ["pelajaran favorit", "mata kuliah favorit", "mata pelajaran", "pelajaran", "kuliah favorit"],
         "lokasi": ["lokasi", "tinggal", "domisili", "alamat", "kota", "daerah", "rumah"],
@@ -818,7 +632,7 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
     # tentukan kategori dengan skor tertinggi
     if word_category_counts:
         top_category = max(word_category_counts.items(), key=lambda x: x[1])
-        if top_category[1] > 0:  # pastikan minimal ada satu kecocokan
+        if top_category[1] > 0:
             logger.info(f"Selected category with score: {top_category}")
             return top_category[0]
     
@@ -826,10 +640,167 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
     if len(question.split()) < 3:
         return "unclear_question"
     
-    # default ke general jika tidak ada kategori yang cocok
     return "general"
 
-# fungsi untuk respons ketika input tidak masuk akal (gibberish)
+def generate_interactive_response(question: str, category: str, context: ConversationContext = None) -> str:
+    # deteksi intent untuk konteks, tapi jangan ekspos ke user
+    question_intent = detect_question_intent(question, context)
+    
+    # opener yang natural tanpa format array
+    simple_openers = [
+        "Oh iya,",
+        "Soal itu,",
+        "Hm,",
+        "Kalau itu,",
+        "",  # kadang langsung jawab tanpa opener
+    ]
+    
+    # untuk follow-up questions
+    if question_intent == "followup" and context and context.last_category:
+        followup_openers = [
+            "Oh, balik ke topik tadi ya?",
+            "Iya, soal itu tadi...",
+            "Right,",
+            ""
+        ]
+        opener = random.choice(followup_openers)
+    else:
+        opener = random.choice(simple_openers)
+    
+    # generate content yang natural berdasarkan kategori
+    # KATEGORI SERIUS - Response panjang dan detail
+    if category == "rekrutmen":
+        content_responses = [
+            # Variasi 1: Focus pada kombinasi teori-praktik
+            "Aku bawa kombinasi teori dan praktek di data science yang cukup solid. Udah terapin langsung di proyek kayak Rush Hour Puzzle Solver dengan implementasi algoritma pathfinding kompleks seperti UCS, A*, dan Dijkstra. Plus pengalaman dari berbagai lomba termasuk Datavidia UI yang ngasah kemampuan handle dataset kompleks, dan jadi asisten praktikum yang ngelatih communication skills. Yang bikin aku beda adalah dedikasi buat terus belajar teknologi baru dan nggak takut hadapi tantangan yang belum pernah dicoba sebelumnya.",
+            
+            # Variasi 2: Focus pada mindset problem-solving
+            "Yang bikin aku menonjol adalah cara pendekatan masalah yang sistematis dan analitis. Dengan pengalaman 2 tahun web development dan 1 tahun fokus data science, aku udah develop mindset untuk breakdown complex problems jadi manageable pieces. Contohnya di proyek Little Alchemy Solver, aku harus implement BFS, DFS, dan Bidirectional Search untuk optimize recipe search di graph yang kompleks. Bukan cuma skill teknis yang solid, tapi juga kemampuan komunikasikan insight dan findings ke stakeholder dengan cara yang mudah dipahami. Plus track record akademik yang konsisten dan keterlibatan aktif di organisasi tech kayak Arkavidia.",
+            
+            # Variasi 3: Focus pada track record
+            "Track record aku di berbagai domain cukup membuktikan versatility dan konsistensi. Mulai dari academic projects yang challenging, participation di kompetisi data science, sampai kontribusi open source di proyek React. Yang paling menonjol adalah implementasi algoritma advanced di berbagai puzzle solver - dari state space optimization sampai heuristic design. Experience ini ngasih aku solid foundation dalam algorithm design dan performance tuning. Plus, background sebagai asisten praktikum dan active member di komunitas tech bikin aku comfortable dalam collaborative environment dan knowledge sharing.",
+            
+            # Variasi 4: Focus pada passion dan learning agility
+            "Passion aku di data science itu genuine dan bukan cuma trend following. Ini terbukti dari consistency dalam deliver hasil berkualitas, baik di tugas kuliah yang demanding, participation di lomba-lomba competitive, maupun contribution ke proyek open source. Yang jadi kekuatan utama adalah learning agility - aku cepat adapt dengan teknologi baru dan selalu penasaran sama challenge yang belum pernah encountered sebelumnya. Contohnya, dalam waktu singkat aku bisa master different algorithm paradigms dan apply mereka ke real-world problems dengan effective optimization strategies.",
+            
+            # Variasi 5: Focus pada value yang dibawa
+            "Aku nggak cuma bawa hard skills yang solid, tapi juga fresh perspective dari dunia akademik dan exposure ke latest research trends. Kombinasi theoretical knowledge di algorithm design dengan hands-on experience di practical implementation bikin aku bisa bridge gap antara research dan application. Skill set aku cover dari data preprocessing dengan pandas, modeling dengan scikit-learn, sampai full-stack development dengan Next.js. Yang penting, aku selalu fokus deliver actionable insights dan maintainable solutions, bukan cuma proof of concept yang impressive tapi susah di-scale.",
+            
+            # Variasi 6: Focus pada collaborative approach
+            "Aku tipe yang thrive dalam collaborative environment dan genuine enjoy sharing knowledge dengan team members. Experience sebagai asisten praktikum dan involvement di organizing committees ngajarin aku gimana cara effective communication dengan diverse backgrounds. Technical skills aku solid - proven di berbagai algorithmic projects dan consistent academic performance - tapi yang lebih valuable adalah ability untuk facilitate knowledge transfer dan mentor junior team members. Plus, aku always open untuk feedback dan continuous improvement, yang crucial dalam fast-paced tech environment.",
+            
+            # Variasi 7: Focus pada unique combination
+            "Kombinasi unik aku adalah strong academic foundation yang dibalance dengan practical project experience dan soft skills development. Aku nggak cuma understand algorithms secara theoretical, tapi udah implement dan optimize mereka untuk real-world constraints. Portfolio projects kayak IQ Puzzler Pro Solver dan Rush Hour Puzzle menunjukkan kemampuan handle complex state spaces dan develop efficient solutions. Plus, active involvement di tech community dan teaching experience bikin aku comfortable dengan knowledge dissemination dan cross-functional collaboration.",
+            
+            # Variasi 8: Focus pada problem-solving capability  
+            "Kelebihan utama aku adalah systematic approach dalam problem decomposition dan solution architecture. Terbukti dari success rate di berbagai challenging projects yang require both algorithmic thinking dan engineering practicality. Aku bisa efficiently analyze requirements, design optimal approaches, dan implement robust solutions yang scalable. Experience covering different domains - dari graph algorithms sampai web development - kasih aku versatile skill set yang applicable ke various business problems. Plus mindset yang always question assumptions dan explore alternative approaches untuk ensure optimal outcomes."
+        ]
+    
+    elif category in ["keahlian_followup", "pengalaman_followup"]:
+        if question_intent == "challenging":
+            content_responses = [
+                # Response detail untuk pertanyaan challenging tentang pengalaman
+                "'Cukup' itu memang relatif, tapi aku confident dengan depth dari pengalaman yang udah dijalani. Dalam 2-3 tahun terakhir, aku nggak cuma belajar surface level tapi bener-bener deep dive ke setiap technology stack dan methodology. Contohnya di Rush Hour Solver, aku spend significant time untuk optimize algorithm performance dari naive approach sampai sophisticated heuristic design. Setiap project ngajarin unique challenges - dari memory management di large state spaces sampai UI/UX considerations untuk complex visualizations. Plus, academic environment di ITB constantly expose aku ke cutting-edge research dan best practices yang immediately applicable ke practical problems.",
+                
+                "Fair point untuk questioning that. Learning curve di tech industry memang steep dan landscape-nya terus berubah rapidly. Tapi yang aku notice adalah foundation yang solid di fundamentals bikin adaptation ke new technologies jadi much smoother. Pengalaman sekarang udah cover diverse areas - algorithm design, data analysis, web development, dan system optimization. Yang penting adalah aku develop strong problem-solving methodology yang transferable across domains. Plus, habit untuk continuous learning dan engagement dengan tech community ensure aku stay updated dengan industry trends dan emerging technologies.",
+                
+                "Honestly, aku acknowledge bahwa experience aku belum se-extensive senior developers dengan decades of industry background. Tapi what I lack in years, aku compensate dengan intensity dan breadth of learning. Every single project aku treat sebagai comprehensive learning opportunity - from initial research phase sampai post-implementation analysis. Academic setting di ITB juga provide unique advantages seperti access ke latest research, structured approach to problem-solving, dan opportunity untuk experiment dengan novel approaches without commercial pressure constraints."
+            ]
+        else:
+            content_responses = [
+                # Response detail untuk follow-up tentang keahlian
+                "Pengalaman aku di data science specifically focus pada end-to-end implementation yang solve real problems. Mulai dari data acquisition dan preprocessing, exploratory analysis untuk understand patterns, feature engineering untuk optimize model performance, sampai deployment considerations untuk production environment. Portfolio projects demonstrate kemampuan handle different types of challenges - optimization problems di puzzle solvers, predictive modeling di finance tracker, dan algorithm visualization untuk educational purposes.",
+                
+                "Skill development journey aku quite structured dan progressive. Dimulai dari solid foundation di programming fundamentals, then expanding ke specialized areas seperti machine learning, algorithm optimization, dan web development. Each phase build upon previous knowledge - web dev experience help dengan deployment considerations, algorithm background crucial untuk model optimization, dan data analysis skills essential untuk business insight generation. Current focus adalah integrating AI capabilities dengan practical applications, seperti yang demonstrated di portfolio ini."
+            ]
+    
+    elif category == "keahlian":
+        content_responses = [
+            # Response detail untuk keahlian profesional
+            "Skill utama aku ada di intersection antara data science dan web development, dengan strong foundation di Python dan JavaScript ecosystems. Untuk data science, aku proficient dengan pandas untuk data manipulation, scikit-learn untuk machine learning models, matplotlib dan seaborn untuk visualization, dan numpy untuk numerical computing. Web development side, aku experienced dengan Next.js dan React untuk frontend, plus kemampuan integrate dengan backend services. Yang crucial adalah understanding tentang when to use which tool - efficiency dan hasil akhir selalu jadi primary consideration dalam technology selection.",
+            
+            # Variasi 2: Intersection focus dengan detail
+            "Specialization aku adalah combining data science capabilities dengan modern web development, yang relatively unique combination. Python jadi daily driver untuk all data-related tasks - from preprocessing messy datasets sampai building predictive models. Next.js dan React ecosystem aku gunakan untuk create interactive applications yang showcase data insights effectively. Portfolio ini perfect example dari integration tersebut - AI backend dengan FastAPI, modern frontend dengan TypeScript, dan seamless user experience. Plus, aku comfortable dengan deployment strategies untuk both data science models dan web applications.",
+            
+            # Variasi 3: Practical experience dengan detail
+            "Yang bikin aku confident adalah extensive hands-on experience dengan tools yang aku claim sebagai expertise. Pandas bukan cuma untuk basic data manipulation, tapi advanced operations seperti multi-index handling, time series analysis, dan performance optimization untuk large datasets. Scikit-learn usage cover dari classical algorithms sampai ensemble methods, dengan understanding tentang hyperparameter tuning dan cross-validation strategies. React development includes state management dengan complex component architectures, performance optimization dengan memoization, dan integration dengan various APIs dan databases.",
+            
+            # Variasi 4: Learning approach dengan detail
+            "Approach aku dalam skill development adalah depth over breadth, dengan focus ke technologies yang proven valuable dan versatile. Python ecosystem dipilih karena extensive libraries untuk data science, machine learning, dan general programming. JavaScript dengan React/Next.js chosen karena powerful untuk building modern, interactive applications. But aku always open untuk explore new technologies kalau memang solve specific problems better. Recent exploration includes FastAPI untuk efficient backend development dan integration dengan AI services, yang directly applicable untuk building scalable data-driven applications."
+        ]
+        
+    elif category == "proyek":
+        content_responses = [
+            # Response detail untuk proyek profesional
+            "Rush Hour Puzzle Solver definitely yang paling technically challenging dan educational. Project ini require implementation dari multiple pathfinding algorithms - UCS untuk optimal solutions, Greedy Best-First untuk speed, A* untuk balanced approach, dan Dijkstra untuk comprehensive exploration. Biggest challenge adalah optimizing algorithm performance untuk handle complex puzzle configurations without compromising solution quality. Aku juga developed custom heuristic functions dan implement efficient state representation untuk minimize memory usage. Plus, created interactive visualization yang allow users untuk understand algorithm behavior step-by-step, yang require careful balance antara technical accuracy dan user experience.",
+            
+            # Variasi 2: Little Alchemy focus dengan detail
+            "Little Alchemy Solver project yang paling intellectually stimulating karena involve complex graph theory applications. Implementation cover BFS untuk breadth exploration, DFS untuk depth analysis, dan Bidirectional Search untuk optimal pathfinding dalam recipe combination space. Challenge utama adalah handling directed graph dengan dynamic recipe dependencies dan optimizing search strategies untuk minimize computation time. Aku develop sophisticated pruning techniques dan implement memoization untuk avoid redundant computations. Result adalah algorithm yang consistently find optimal recipe paths bahkan untuk complex item combinations yang require dozens of intermediate steps.",
+            
+            # Variasi 3: Learning impact dengan detail  
+            "Setiap algorithmic project memberikan unique insights dan expand understanding tentang computational complexity dan optimization strategies. Rush Hour taught me about state space exploration dan heuristic design, Little Alchemy about graph traversal optimization dan dynamic programming applications, IQ Puzzler Pro about constraint satisfaction dan backtracking efficiency. Collectively, these projects demonstrate ability untuk adapt different algorithmic paradigms to specific problem domains dan develop custom solutions yang account untuk real-world constraints seperti memory limitations dan user experience requirements.",
+            
+            # Variasi 4: Technical depth dengan detail
+            "Yang bikin proud dari project-project algorithmic ini adalah level of technical sophistication dan attention to both performance dan usability. Bukan cuma implement standard algorithms, tapi juga develop custom optimizations, design efficient data structures, dan create comprehensive testing frameworks untuk validate correctness dan performance. Documentation dan code organization also prioritized untuk ensure maintainability dan knowledge transfer. Each project include detailed analysis tentang time complexity, space complexity, dan comparison dengan alternative approaches untuk demonstrate thorough understanding tentang algorithm design principles."
+        ]
+        
+    # KATEGORI SANTAI - Response singkat dan casual
+    elif category == "makanan_favorit":
+        content_responses = [
+            "Street food Indonesia jadi obsesi. Martabak, sate, ketoprak, semua enak. Jakarta punya spot-spot hidden gems yang seru.",
+            "Penggemar berat kuliner jalanan. Gorengan sampai batagor, semuanya punya cerita unik. Sering food hunting sambil ngerjain tugas.",
+            "Hobi jelajah street food udah lifestyle. Tiap daerah punya specialty beda. Jakarta, spot favorit around Sabang sama Senayan.",
+            "Street food comfort food banget. Pas stress deadline atau stuck coding, keliling cari makan enak jadi refreshing."
+        ]
+        
+    elif category == "lagu_favorit":
+        content_responses = [
+            "Selera musik nostalgic. 'Without You' Air Supply, 'Sekali Ini Saja' Glenn Fredly. Coding pakai lo-fi beats atau soundtrack film.",
+            "Suka ballad 90an. Lirik dalam, melodi timeless. Ada emotional connection yang bikin rileks pas overwhelmed.",
+            "Mix Indonesia dan barat klasik. Glenn Fredly, Noah dari lokal. Air Supply, Celine Dion internasional. Mostly pop ballad.",
+            "Musik punya fungsi beda. Ballad buat relaxing, instrumental buat coding, oldies buat mood booster. Playlist organized by activity."
+        ]
+        
+    elif category == "hobi":
+        content_responses = [
+            "Reading, traveling, food hunting. Novel fantasy kayak Omniscient Reader Viewpoint favorit. Street food exploration nggak bosen.",
+            "Balance intellectual dan sensory. Baca novel buat perspective baru, traveling buat cultural exposure. Both influence problem-solving.",
+            "Aktivitas yang kasih learning experience. Reading expand imagination, traveling broaden worldview, food hunting appreciate culture.",
+            "Hobi somehow connected ke cara kerja. Reading fantasy relate ke system design. Traveling ngajarin adaptability."
+        ]
+    
+    # untuk pertanyaan personal, redirect dengan halus  
+    elif category.startswith("personal_"):
+        content_responses = [
+            "Itu agak personal sih. Mending kita bahas passion aku di data science atau project-project yang lagi dikerjain.",
+            "Soal pribadi kurang nyaman share. Kalau tertarik sama technical journey aku, bisa tanya tentang coding experience atau algorithm projects.",
+            "Untuk hal personal prefer nggak bahas. Lebih seru discuss proyek data science atau tech stack yang aku pakai."
+        ]
+    
+    else:
+        # fallback responses yang simple
+        content_responses = [
+            "Itu topik yang menarik. Pengalaman dan skill yang aku develop saling connect, dari technical sampai communication skills.",
+            "Setiap aspect dari journey aku contribute ke overall capability. Whether technical expertise atau problem-solving approach.",
+            "Aku suka sharing tentang experience di tech. Each project dan challenge shaped perspective aku tentang development dan innovation."
+        ]
+    
+    # pilih content dan combine dengan opener
+    selected_content = random.choice(content_responses)
+    
+    # combine dengan spasi yang tepat
+    if opener:
+        full_response = f"{opener} {selected_content}"
+    else:
+        full_response = selected_content
+    
+    # simple closers (jarang dipakai)
+    if random.random() > 0.8:  # hanya 20% chance
+        simple_closers = [" Gimana?", " Ada lagi?", ""]
+        full_response += random.choice(simple_closers)
+    
+    return full_response
+
 def generate_gibberish_response() -> str:
     responses = [
         "Hmm, maaf aku tidak mengerti pertanyaanmu. Bisa diulangi dengan kata-kata yang lebih jelas?",
@@ -841,7 +812,6 @@ def generate_gibberish_response() -> str:
     ]
     return random.choice(responses)
 
-# fungsi untuk respons ketika pertanyaan tidak jelas
 def generate_clarification_response() -> str:
     clarifications = [
         "Hmm, pertanyaanmu kurang spesifik nih. Coba tanyakan lebih detail tentang hobi, proyek, keahlian, atau lagu favorit?",
@@ -852,14 +822,14 @@ def generate_clarification_response() -> str:
     ]
     return random.choice(clarifications)
 
-# menyusun prompt yang kontekstual dengan mempertimbangkan context
 def create_context_aware_prompt(question: str, context: ConversationContext = None) -> str:
     category = categorize_question(question, context)
     
-    # base prompt yang selalu ada
     base_prompt = f"""
     Kamu adalah asisten pribadi dari {user_profile['nama']} yang cerdas, informatif, dan memiliki kepribadian yang santai. 
     Jawab dengan bahasa Indonesia yang natural dan santai, tapi tetap informatif.
+    
+    PENTING: Selalu acknowledge pertanyaan user dengan mengutip sebagian pertanyaannya di awal respons, buat conversation terasa interactive dan engaging. Jangan langsung jawab, tapi tunjukkan bahwa kamu understand context dan nuance dari pertanyaan mereka.
     
     Profil dasar:
     - Nama: {user_profile['nama']}
@@ -878,36 +848,9 @@ def create_context_aware_prompt(question: str, context: ConversationContext = No
         - Kategori terakhir dibahas: {context.last_category if context.last_category else "Belum ada"}
         - Item yang disebutkan sebelumnya: {', '.join(context.mentioned_items) if context.mentioned_items else "Belum ada"}
         - Pertanyaan sebelumnya: {previous_question}
-        - Item yang direferensikan paling sering: {', '.join([item for item, count in context.get_most_referenced_items(2)]) if context.referenced_items else "Belum ada"}
+        - Tone conversation: {context.conversation_tone}
         
-        PENTING: Jika pertanyaan saat ini sepertinya mereferensikan atau follow-up dari percakapan sebelumnya, terutama jika ada referensi ke item yang disebutkan sebelumnya, pastikan untuk menjawab dalam konteks tersebut.
-        """
-        
-        # tambahkan kemungkinan pertanyaan follow-up yang sudah diantisipasi
-        if context.potential_followups and context.last_category in context.potential_followups:
-            base_prompt += f"""
-            Kemungkinan pertanyaan follow-up yang diharapkan berdasarkan respons sebelumnya:
-            {json.dumps(context.potential_followups[context.last_category], indent=2, ensure_ascii=False)}
-            
-            PENTING: Jika pertanyaan pengguna mirip dengan salah satu pertanyaan yang diantisipasi di atas, berikan jawaban yang lebih spesifik dan lengkap.
-            """
-    
-    # penanganan khusus untuk follow-up item spesifik
-    specific_item = None
-    if context and context.mentioned_items:
-        for item in specific_follow_up_responses.keys():
-            if re.search(r'\b' + re.escape(item) + r'\b', question.lower()) and item in context.mentioned_items:
-                specific_item = item
-                break
-    
-    if specific_item:
-        base_prompt += f"""
-        SANGAT PENTING: Pertanyaan ini jelas mereferensikan "{specific_item}" yang telah disebutkan sebelumnya.
-        Berikan respons yang fokus mendetail tentang "{specific_item}" dan tunjukkan pengetahuan spesifik tentang hal tersebut.
-        Berikut adalah beberapa contoh respons yang bisa dijadikan referensi:
-        {json.dumps(specific_follow_up_responses[specific_item], indent=2, ensure_ascii=False)}
-        
-        Silahkan gunakan konten tersebut sebagai inspirasi atau pilih salah satu respons yang paling relevan.
+        PENTING: Jika pertanyaan saat ini sepertinya mereferensikan atau follow-up dari percakapan sebelumnya, WAJIB acknowledge connection tersebut dan respond dalam konteks yang relevan.
         """
     
     # penanganan untuk input gibberish
@@ -940,32 +883,67 @@ def create_context_aware_prompt(question: str, context: ConversationContext = No
         base_prompt += f"""
         Kamu mendapat pertanyaan yang bersifat personal dan sebaiknya dialihkan. Berikan jawaban dengan format:
         
-        1. Mulai dengan pernyataan halus bahwa kamu tidak bisa menjawab pertanyaan personal itu
-        2. Lalu alihkan pembicaraan ke topik profesional, seperti keahlian atau proyek
-        3. Jangan menyebutkan hal-hal personal yang ditanyakan sama sekali dalam jawabanmu
+        1. Acknowledge pertanyaan mereka dengan mengutip sebagian pertanyaannya
+        2. Berikan penolakan yang halus untuk menjawab hal personal tersebut
+        3. Alihkan pembicaraan ke topik profesional dengan smooth transition
         
-        PENTING: Jangan jawab pertanyaan personal apapun, tetapi juga jangan terlalu frontal dalam penolakan.
+        PENTING: Jangan jawab pertanyaan personal apapun, tetapi juga jangan terlalu frontal dalam penolakan. Buat transisi yang natural.
         """
-        
-        # tambahkan beberapa topik pengalihan berdasarkan jenis pertanyaan personal
-        if category == "personal_relationship":
-            base_prompt += f"""
-            Alihkan dengan membicarakan fokus pada karir dan proyek. Misalnya: "Yang pasti, saat ini aku lebih fokus mengembangkan karir di bidang data science dan mengerjakan beberapa proyek menarik seperti {user_profile['proyek'][0].split(' - ')[0]} atau {user_profile['proyek'][3].split(' - ')[0]}."
-            
-            SANGAT PENTING: Jangan mengonfirmasi atau menyangkal status hubungan dalam bentuk apapun.
-            """
     
     # tambahkan informasi tambahan berdasarkan kategori pertanyaan
+    elif category == "rekrutmen":
+        base_prompt += f"""
+        Pertanyaan tentang rekrutmen atau hiring. Ini pertanyaan yang penting dan perlu dijawab dengan comprehensive dan convincing.
+        
+        WAJIB:
+        1. Acknowledge pertanyaan tentang rekrutmen/hiring di awal
+        2. Highlight unique value proposition dengan specific examples
+        3. Mention konkrit achievements dan skills
+        4. Show passion dan growth mindset
+        5. Address concerns tentang experience level jika relevan
+        
+        Focus pada:
+        - Kombinasi theoretical knowledge + practical experience
+        - Specific projects dan achievements
+        - Learning agility dan adaptability
+        - Communication skills dan teamwork
+        - Passion for continuous improvement
+        
+        Proyek unggulan: {user_profile['proyek'][0]}, {user_profile['proyek'][1]}
+        Prestasi: {', '.join(user_profile['prestasi'])}
+        Pengalaman: {user_profile['pengalaman']}
+        """
+        
+    elif category.endswith("_followup"):
+        base_prompt += f"""
+        Ini adalah pertanyaan follow-up dari kategori {category.replace('_followup', '')}. 
+        
+        WAJIB:
+        1. Reference kembali ke pertanyaan atau topik sebelumnya
+        2. Acknowledge nuance atau challenge dalam pertanyaan
+        3. Provide more detailed atau thoughtful analysis
+        4. Show self-awareness dan realistic perspective
+        
+        Context from previous conversation:
+        - Last category: {context.last_category if context else 'None'}
+        - Previous items discussed: {', '.join(context.mentioned_items) if context and context.mentioned_items else 'None'}
+        """
+        
     elif category == "keahlian":
         base_prompt += f"""
         Keahlian: {', '.join(user_profile['keahlian'])}
         Detail keahlian:
         {json.dumps(user_profile['keahlian_detail'], indent=2, ensure_ascii=False)}
         
-        Pertanyaan pengguna adalah tentang keahlian. Jawab dengan detail tentang keahlian utama, seberapa mahir, dan bagaimana keahlian tersebut digunakan dalam pekerjaan atau proyek. Berikan contoh konkret.
+        Pertanyaan tentang keahlian. WAJIB:
+        1. Acknowledge specific aspect yang ditanyakan
+        2. Provide concrete examples dan use cases
+        3. Explain learning journey atau development process
+        4. Show depth of understanding, bukan just surface level
         
         PENTING: Tekankan keahlian di bidang Data Science, bukan AI. Jika menyebutkan AI, sampaikan bahwa itu adalah bagian dari ekosistem Data Science.
         """
+        
     elif category == "proyek":
         base_prompt += f"""
         Proyek unggulan:
@@ -978,244 +956,73 @@ def create_context_aware_prompt(question: str, context: ConversationContext = No
         2. {user_profile['proyek_detail']['Rush Hour Puzzle Solver']}
         3. {user_profile['proyek_detail']['IQ Puzzler Pro Solver']}
         
-        Pertanyaan pengguna adalah tentang proyek. Jawab dengan mendeskripsikan salah satu dari proyek algoritma di atas (Algoritma Pencarian Little Alchemy 2, Rush Hour Puzzle Solver, atau IQ Puzzler Pro Solver). Jelaskan tantangan teknis, algoritma yang dipakai, dan hasil yang dicapai.
+        Pertanyaan tentang proyek. WAJIB:
+        1. Acknowledge interest mereka terhadap proyek
+        2. Choose 1-2 most relevant projects untuk discuss in detail
+        3. Explain technical challenges dan solutions
+        4. Share learnings dan impact from the project
         
-        PENTING: Fokuskan pada proyek-proyek algoritma dan puzzle di atas, bukan proyek lainnya.
+        PENTING: Fokuskan pada proyek-proyek algoritma dan puzzle di atas. Explain both technical aspects dan personal growth dari projects tersebut.
         """
-    elif category == "tantangan_proyek":
-        base_prompt += f"""
-        Tantangan proyek:
-        {json.dumps(user_profile['tantangan_proyek'], indent=2, ensure_ascii=False)}
         
-        Pertanyaan pengguna adalah tentang tantangan dalam proyek. Jelaskan dengan detail tantangan teknis yang dihadapi dalam pengembangan proyek unggulan, terutama proyek algoritma. Ceritakan bagaimana tantangan tersebut diatasi dengan kreativitas dan problem-solving.
-        """
-    elif category == "hobi":
-        base_prompt += f"""
-        Hobi: {', '.join(user_profile['hobi'])}
-        Detail hobi:
-        {json.dumps(user_profile['hobi_detail'], indent=2, ensure_ascii=False)}
-        
-        Pertanyaan pengguna adalah tentang hobi. Jawab dengan menjelaskan hobi yang disukai, seperti membaca novel (terutama 'Omniscient Reader Viewpoint'), traveling ke destinasi lokal, atau menjelajahi street food. Jangan menyebutkan hobi hiking. Berikan beberapa cerita menarik terkait hobi.
-        """
-    elif category == "pendidikan":
-        base_prompt += f"""
-        Pendidikan: {user_profile['pendidikan']}
-        Pendidikan sebelumnya:
-        {json.dumps(user_profile['pendidikan_sebelumnya'], indent=2, ensure_ascii=False)}
-        
-        Pertanyaan pengguna adalah tentang pendidikan. Jawab dengan informasi tentang latar belakang pendidikan, jurusan, mata kuliah favorit, atau pengalaman belajar yang berkesan. Jelaskan juga bagaimana pendidikan mempengaruhi karir.
-        """
-    elif category == "mata_kuliah":
-        base_prompt += f"""
-        Mata kuliah favorit: {user_profile['kuliah']['mata_kuliah_favorit']}
-        
-        Pertanyaan pengguna adalah tentang mata kuliah atau pelajaran favorit. Jelaskan mengapa menyukai mata kuliah tersebut, apa yang menarik, dan bagaimana pengaruhnya terhadap minat di bidang data science dan algoritma.
-        """
-    elif category == "data_science":
-        base_prompt += f"""
-        Pengalaman Data Science: 
-        - 2 tahun pengalaman di bidang data science
-        - Keahlian: analisis data menggunakan pandas, matplotlib, dan scikit-learn
-        - Fokus pada pengolahan data, visualisasi, dan pembuatan model prediktif
-        - Awal mula belajar: {user_profile['belajar_coding']['data_science']}
-        
-        Pertanyaan pengguna adalah tentang data science atau AI. Jawab dengan menjelaskan pengalaman dan ketertarikan di bidang data science, bagaimana menggunakan tools seperti Python, pandas, dan scikit-learn dalam proyek. Tekankan bahwa fokus utama adalah data science, bukan AI secara spesifik.
-        
-        PENTING: Fokuskan pada data science, visualisasi data, dan analisis statistik. Jika pertanyaan tentang AI, jelaskan dalam konteks data science (sebagai bagian dari toolset data science).
-        """
-    elif category == "tools":
-        base_prompt += f"""
-        Tools favorit:
-        {json.dumps(user_profile['tools_favorit'], indent=2, ensure_ascii=False)}
-        
-        Pertanyaan pengguna adalah tentang tools yang sering digunakan. Jelaskan tools favorit untuk pengembangan, data science, dan alasan mengapa tools tersebut disukai. Berikan contoh penggunaan tools dalam proyek nyata.
-        """
-    elif category == "prestasi":
-        base_prompt += f"""
-        Prestasi: {', '.join(user_profile['prestasi'])}
-        
-        Pertanyaan pengguna adalah tentang prestasi. Jawab dengan menjelaskan pencapaian penting, penghargaan, atau pengakuan yang pernah diraih. Ceritakan tantangan dan pelajaran yang didapat dari prestasi tersebut.
-        """
-    elif category == "lomba":
-        base_prompt += f"""
-        Pengalaman lomba:
-        {json.dumps(user_profile['lomba'], indent=2, ensure_ascii=False)}
-        
-        Pertanyaan pengguna adalah tentang lomba yang pernah diikuti. Ceritakan pengalaman mengikuti lomba, terutama Datavidia UI yang berkesan karena kompleksitasnya. Jelaskan proses, tantangan, dan pembelajaran dari lomba tersebut.
-        """
-    elif category == "karakter":
-        base_prompt += f"""
-        Karakter: {user_profile['karakter']}
-        Detail kepribadian:
-        {json.dumps(user_profile['sifat_detail'], indent=2, ensure_ascii=False)}
-        Tipe: {user_profile['personality']['tipe']}
-        
-        Pertanyaan pengguna adalah tentang kepribadian atau karakter. Jawab dengan menjelaskan sifat-sifat utama, pendekatan dalam bekerja, dan bagaimana karakter tersebut mempengaruhi interaksi profesional dan personal.
-        """
-    elif category == "portofolio_tech":
-        base_prompt += f"""
-        Teknologi portofolio:
-        {json.dumps(user_profile['portfolio_tech'], indent=2, ensure_ascii=False)}
-        
-        Pertanyaan pengguna adalah tentang teknologi yang digunakan untuk membangun portofolio ini. Jelaskan stack teknologi yang dipakai (frontend dan backend), alasan pemilihan teknologi tersebut, dan fitur utama dari portofolio.
-        """
-    elif category == "rencana":
-        base_prompt += f"""
-        Rencana masa depan: {user_profile['rencana_masa_depan']}
-        
-        Pertanyaan pengguna adalah tentang rencana atau tujuan masa depan. Jawab dengan menjelaskan visi jangka panjang, rencana karir, proyek impian, atau keahlian yang ingin dikembangkan.
-        
-        PENTING: Fokuskan pada rencana terkait data science, bukan AI. Jika menyebutkan AI, sampaikan dalam konteks aplikasi data science.
-        """
-    elif category == "lokasi":
-        base_prompt += f"""
-        Lokasi: {user_profile['lokasi']}
-        
-        Pertanyaan pengguna adalah tentang lokasi. Jawab dengan informasi tentang kota tempat tinggal, bagaimana kehidupan di kota tersebut, dan apakah menikmati tinggal di sana.
-        """
-    elif category == "pekerjaan":
-        base_prompt += f"""
-        Pekerjaan: {user_profile['pekerjaan']}
-        
-        Pertanyaan pengguna adalah tentang pekerjaan. Jawab dengan informasi tentang posisi saat ini, tanggung jawab, perusahaan, dan bagaimana perjalanan karir sampai ke posisi sekarang.
-        
-        PENTING: Tekankan aspek data science dalam pekerjaan, bukan AI.
-        """
-    elif category == "pengalaman":
-        base_prompt += f"""
-        Pengalaman: {user_profile['pengalaman']}
-        
-        Pertanyaan pengguna adalah tentang pengalaman kerja. Jawab dengan informasi tentang lama bekerja di bidang tertentu, proyek yang pernah dikerjakan, dan keterampilan yang didapat dari pengalaman tersebut.
-        
-        PENTING: Tekankan pengalaman di bidang data science, bukan AI.
-        """
-    elif category == "manajemen_waktu":
-        base_prompt += f"""
-        Manajemen waktu: {user_profile['manajemen']['waktu']}
-        
-        Pertanyaan pengguna adalah tentang manajemen waktu. Jelaskan bagaimana mengelola waktu antara kuliah, proyek, dan kegiatan lain. Berikan tips praktis untuk produktivitas dan efisiensi.
-        """
-    elif category == "manajemen_stres":
-        base_prompt += f"""
-        Manajemen stres: {user_profile['manajemen']['stres']}
-        
-        Pertanyaan pengguna adalah tentang cara mengatasi stres. Jelaskan aktivitas yang dilakukan untuk relaksasi, seperti menonton film horror/romance atau drama Korea. Ceritakan bagaimana pengalaman di ITB melatih ketahanan menghadapi tekanan.
-        """
-    elif category == "cerita_kuliah":
-        base_prompt += f"""
-        Pengalaman kuliah: {user_profile['kuliah']['pengalaman_culture_shock']}
-        
-        Pertanyaan pengguna adalah tentang cerita atau pengalaman di kuliah. Ceritakan tentang culture shock saat masuk ITB, tantangan beradaptasi dengan pace pembelajaran yang cepat, dan bagaimana mengatasi tantangan tersebut.
-        """
-    elif category == "organisasi":
-        base_prompt += f"""
-        Pengalaman organisasi: {user_profile['kuliah']['organisasi']}
-        
-        Pertanyaan pengguna adalah tentang pengalaman organisasi. Ceritakan tentang kepanitiaan Arkavidia di divisi academy yang fokus pada bootcamp data science. Jelaskan peran, tanggung jawab, dan pembelajaran dari pengalaman tersebut.
-        """
-    elif category == "belajar_mandiri":
-        base_prompt += f"""
-        Pertanyaan pengguna adalah tentang belajar mandiri. Jelaskan pendekatan dalam belajar secara autodidak, sumber belajar yang digunakan (online courses, tutorial, dokumentasi), dan cara tetap konsisten dalam belajar mandiri.
-        """
-    elif category == "belajar_kegagalan":
-        base_prompt += f"""
-        Belajar dari kegagalan: {user_profile.get('manajemen', {}).get('coping_mechanism', 'jangan selalu menuruti coping mechanism diri sendiri')}
-        
-        Pertanyaan pengguna adalah tentang pelajaran dari kegagalan. Jelaskan pengalaman dari kegagalan akademik, insight yang didapat, dan bagaimana mengatasi coping mechanism yang tidak produktif.
-        """
-    elif category == "kerja_tim":
-        base_prompt += f"""
-        Kerja tim: {user_profile['manajemen']['bekerja_tim']}
-        
-        Pertanyaan pengguna adalah tentang kerja tim atau mengatasi konflik. Jelaskan pendekatan dalam bekerja dengan tim, bagaimana menangani perbedaan pendapat, dan peran yang biasa diambil dalam tim (observer dulu sebelum mengambil inisiatif sebagai leader jika dibutuhkan).
-        """
-    elif category == "kebiasaan_ngoding":
-        base_prompt += f"""
-        Kebiasaan ngoding: {user_profile['personality']['kebiasaan_ngoding']}
-        
-        Pertanyaan pengguna adalah tentang kebiasaan ngoding. Ceritakan preferensi waktu ngoding (terutama malam hari saat pikiran lebih jernih), rutinitas, dan lingkungan yang membuat produktif dalam coding.
-        """
+    # untuk kategori lainnya, maintain same structure...
     elif category == "lagu_favorit":
         base_prompt += f"""
         Lagu favorit:
         {json.dumps(user_profile['lagu_favorit'], indent=2, ensure_ascii=False)}
         
-        Pertanyaan pengguna adalah tentang lagu atau musik favorit. Jelaskan dengan detail lagu-lagu yang disukai seperti "Without You" dari Air Supply, "Sekali Ini Saja" dari Glenn Fredly, atau genre musik oldies yang disukai. Sebutkan juga lagu atau jenis musik yang sering didengarkan saat ngoding.
+        Pertanyaan tentang musik. WAJIB:
+        1. Acknowledge specific aspect tentang musik yang mereka tanyakan
+        2. Share personal connection ke lagu-lagu tersebut
+        3. Explain mengapa certain songs resonate dengan mu
+        4. Maybe mention context kapan usually listen to them
         
-        PENTING: Pastikan jawabanmu benar-benar fokus pada lagu dan musik yang disukai, bukan topik lain seperti hobi atau keahlian. Bahkan jika pertanyaannya ambigu, prioritaskan untuk menjawab tentang musik.
+        PENTING: Pastikan jawabanmu benar-benar fokus pada lagu dan musik yang disukai, show genuine enthusiasm untuk musik.
         """
+        
     elif category == "makanan_favorit":
         base_prompt += f"""
         Makanan favorit:
         {json.dumps(user_profile['makanan_favorit'], indent=2, ensure_ascii=False)}
         
-        Pertanyaan pengguna adalah tentang makanan favorit, terutama street food Indonesia. Jelaskan makanan-makanan jalanan yang disukai seperti martabak, sate, ketoprak, batagor dan berbagai jenis gorengan. Ceritakan juga pengalaman mencoba street food di berbagai tempat dan kenapa street food Indonesia itu istimewa.
+        Pertanyaan tentang makanan/street food. WAJIB:
+        1. Acknowledge their interest in your food preferences
+        2. Share specific details tentang why you love certain foods
+        3. Maybe mention places atau experiences related to the food
+        4. Show excitement tentang Indonesian street food culture
         
-        PENTING: Pastikan jawabanmu berfokus pada makanan, terutama street food, dan berikan detail yang membuat jawaban terasa personal dan autentik. Jika ada pertanyaan spesifik tentang jenis makanan tertentu (seperti ketoprak), beri jawaban khusus tentang makanan tersebut.
-        """
-    elif category == "moto_hidup":
-        base_prompt += f"""
-        Moto hidup: {user_profile['moto']}
-        
-        Pertanyaan pengguna adalah tentang moto hidup. Jelaskan moto "Menuju tak terbatas dan melampauinya", makna filosofis di baliknya, dan bagaimana moto tersebut mempengaruhi keputusan dan tindakan sehari-hari.
-        """
-    else:
-        base_prompt += f"""
-        Keahlian: {', '.join(user_profile['keahlian'])}
-        Hobi: {', '.join(user_profile['hobi'])}
-        Proyek unggulan:
-        1. {user_profile['proyek'][0]}
-        2. {user_profile['proyek'][3]}
-        Prestasi: {', '.join(user_profile['prestasi'])}
-        Rencana masa depan: {user_profile['rencana_masa_depan']}
-        
-        Coba tebak apa konteks dari pertanyaan pengguna dan berikan jawaban yang relevan. Hindari jawaban yang terlalu generik. Jika pertanyaan tidak jelas, berikan informasi tentang profil utama dengan singkat dan tawarkan untuk memberikan informasi lebih lanjut tentang topik tertentu.
-        
-        PENTING: Fokuskan pada data science, bukan AI. Jika membahas keahlian atau proyek, tekankan Algoritma Pencarian Little Alchemy 2.
+        PENTING: Focus specifically on street food dan show genuine passion untuk culinary exploration.
         """
     
-    # instruksi spesifik berdasarkan jika pertanyaan adalah follow-up
-    if context and is_follow_up_question(question, context):
-        if category == "makanan_favorit" and re.search(r'\bketoprak\b', question.lower()) and "ketoprak" in context.mentioned_items:
-            base_prompt += f"""
-            Pertanyaan pengguna adalah tentang ketoprak, salah satu street food favorit. Jelaskan pengalaman menikmati ketoprak, apa yang kamu suka dari ketoprak (rasanya, teksturnya, sausnya), di mana biasanya makan ketoprak, dan berikan detail personal tentang pengalaman makan ketoprak.
-            
-            SANGAT PENTING: Jawab dengan antusias dan personal, fokus pada ketoprak sebagai makanan favorit. Gunakan salah satu respons berikut atau kombinasi keduanya:
-            {json.dumps(specific_follow_up_responses["ketoprak"], indent=2, ensure_ascii=False)}
-            """
-        elif any(re.search(r'\b' + re.escape(item) + r'\b', question.lower()) for item in context.mentioned_items):
-            # cek jika item spesifik ada dalam respons khusus
-            for item, responses in specific_follow_up_responses.items():
-                if re.search(r'\b' + re.escape(item) + r'\b', question.lower()) and item in context.mentioned_items:
-                    base_prompt += f"""
-                    Pertanyaan pengguna jelas mereferensikan {item} yang disebutkan sebelumnya. Berikan respons yang spesifik dan detail tentang {item}, tunjukkan pengetahuan yang mendalam.
-                    
-                    SANGAT PENTING: Gunakan salah satu respons berikut sebagai referensi atau inspirasi:
-                    {json.dumps(responses, indent=2, ensure_ascii=False)}
-                    """
-                    break
-            else:
-                base_prompt += f"""
-                Pertanyaan pengguna mereferensikan item yang disebutkan sebelumnya dalam percakapan. Pastikan jawabanmu mempertahankan konteks yang sama dan menjawab dengan detail tentang item tersebut. Jika sebelumnya kamu membahas makanan, tetap fokus pada makanan. Jika sebelumnya membahas musik, tetap fokus pada musik.
-                """
+    else:
+        # default handling untuk general questions
+        base_prompt += f"""
+        Berikan informasi yang relevant dengan pertanyaan. WAJIB:
+        1. Acknowledge what they're asking tentang
+        2. Connect question to relevant aspects dari profile mu
+        3. Provide personal insights atau experiences
+        4. Keep it conversational dan engaging
+        """
     
     base_prompt += f"""
     Pertanyaan pengguna: {question}
     
-    Jawab dengan bahasa Indonesia yang santai dan alami (tidak kaku), tapi tetap informatif. Gunakan sapaan "aku" saat merujuk diri sendiri dan "kamu" saat merujuk pengguna. Variasikan struktur kalimat untuk terdengar natural. Berikan contoh spesifik dan detail untuk mengilustrasikan poin yang disampaikan. Gunakan sedikit humor yang relevan jika sesuai. Respons max 4-5 kalimat.
+    INSTRUCTIONS:
+    1. Acknowledge pertanyaan dengan natural, jangan berlebihan
+    2. Jawab dengan santai dan to the point
+    3. Bahasa Indonesia yang natural, tidak kaku
+    4. Kasih contoh spesifik kalau relevan
+    5. Gunakan "aku" dan "kamu" 
+    6. Max 3-4 kalimat, concise tapi informatif
+    7. Jangan terlalu banyak English words
+    8. Tone santai, tidak formal atau "lebay"
     
-    PENTING: Pastikan respons kamu tidak mengandung spasi berlebih, pastikan transisi antar kalimat alami dan jelas.
-    
-    SANGAT PENTING: 
-    - Jika pertanyaan tentang lagu atau musik, jawablah HANYA tentang lagu favorit dan jangan membahas hobi atau topik lain.
-    - Jika pertanyaan tentang makanan, jawablah HANYA tentang makanan favorit terutama street food.
-    - Jika pertanyaan follow-up dari topik sebelumnya, pertahankan konteks yang sama.
-    - Jika pertanyaan mereferensikan item tertentu (seperti ketoprak, tanpa you, dsb), pastikan responmu memberikan informasi spesifik tentang item tersebut.
+    Contoh yang BENAR: "Oh, soal itu aku punya pengalaman..." 
+    Contoh yang SALAH: "That's definitely something worth discussing. From my perspective..."
     """
     
     return base_prompt
 
-# fungsi untuk normalisasi teks respons
 def normalize_text(text: str) -> str:
     # hapus spasi berlebih dan standardisasi tanda baca
     cleaned = re.sub(r'\s+', ' ', text)
@@ -1234,7 +1041,6 @@ def normalize_text(text: str) -> str:
     
     return cleaned.strip()
 
-# fungsi untuk memanggil OpenAI API
 def call_openai_api(prompt):
     logger.info("mengirim permintaan ke openai")
     api_key = os.getenv("OPENAI_API_KEY")
@@ -1251,11 +1057,11 @@ def call_openai_api(prompt):
     payload = {
         "model": "gpt-3.5-turbo",
         "messages": [
-            {"role": "system", "content": "Kamu adalah asisten virtual yang membantu menjawab pertanyaan tentang pemilik portfolio dengan cara yang personal, informatif, dan santai."},
+            {"role": "system", "content": "Kamu adalah asisten virtual yang membantu menjawab pertanyaan tentang pemilik portfolio dengan cara yang personal, informatif, dan sangat interactive. Selalu acknowledge pertanyaan user dan buat conversation terasa natural."},
             {"role": "user", "content": prompt}
         ],
         "max_tokens": 800,
-        "temperature": 0.7
+        "temperature": 0.8
     }
     
     try:
@@ -1275,7 +1081,6 @@ def call_openai_api(prompt):
             logger.error("tidak ada hasil dari openai")
             raise ValueError("Tidak ada hasil dari OpenAI")
         
-        # normalisasi respons sebelum mengembalikan
         raw_response = result["choices"][0]["message"]["content"]
         normalized_response = normalize_text(raw_response)
         return normalized_response
@@ -1284,70 +1089,48 @@ def call_openai_api(prompt):
         logger.error(f"request error: {str(e)}")
         raise ValueError(f"Error saat berkomunikasi dengan OpenAI: {str(e)}")
 
-# endpoint untuk pertanyaan
 @app.post("/ask", response_model=AIResponse)
 async def ask_ai(request: QuestionRequest):
     try:
-        # cleanup sessions yang tidak aktif
         cleanup_old_sessions()
         
-        # log pertanyaan
         logger.info(f"pertanyaan diterima: {request.question}")
         
-        # validasi input - jika terlalu sedikit karakter atau gibberish
         if len(request.question.strip()) < 2:
             return AIResponse(
                 response="Pertanyaanmu terlalu singkat. Coba tanyakan lebih detail tentang diriku, seperti hobi, proyek, atau keahlian yang kumiliki.",
                 session_id=request.session_id or str(uuid.uuid4())
             )
         
-        # dapatkan atau buat session ID
         session_id = request.session_id
         if not session_id:
             session_id = str(uuid.uuid4())
             logger.info(f"Created new session ID: {session_id}")
         
-        # dapatkan atau inisialisasi context percakapan
         if session_id not in conversation_sessions:
             conversation_sessions[session_id] = ConversationContext()
         
         context = conversation_sessions[session_id]
         
-        # tentukan kategori
         category = categorize_question(request.question, context)
         logger.info(f"Kategori terdeteksi: {category}")
         
-        # penanganan khusus untuk gibberish
         if category == "gibberish":
             response_text = generate_gibberish_response()
             context.update(category, request.question, response_text)
             return AIResponse(response=response_text, session_id=session_id)
         
-        # penanganan khusus untuk item yang spesifik
-        specific_item_response = None
-        if context and context.mentioned_items:
-            for item, responses in specific_follow_up_responses.items():
-                if re.search(r'\b' + re.escape(item) + r'\b', request.question.lower()) and item in context.mentioned_items:
-                    specific_item_response = random.choice(responses)
-                    logger.info(f"Menggunakan respons khusus untuk: {item}")
-                    # update konteks dengan interaksi ini
-                    context.update(category, request.question, specific_item_response)
-                    return AIResponse(response=specific_item_response, session_id=session_id)
-        
         # membuat prompt yang lebih kontekstual
         prompt = create_context_aware_prompt(request.question, context)
         
         try:
-            # coba panggil openai
             response_text = call_openai_api(prompt)
             logger.info("respons diterima dari openai")
             
-            # update context with this interaction
             context.update(category, request.question, response_text)
             
             return AIResponse(response=response_text, session_id=session_id)
         except Exception as openai_error:
-            # jika gagal, gunakan fallback
             logger.warning(f"fallback ke mock response: {str(openai_error)}")
             mock_response = await ask_ai_mock(request)
             context.update(category, request.question, mock_response.response)
@@ -1358,16 +1141,13 @@ async def ask_ai(request: QuestionRequest):
         logger.error(f"error saat memproses permintaan: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Terjadi kesalahan: {str(e)}")
 
-# endpoint mock dengan respons yang lebih kontekstual dan format yang lebih baik
 @app.post("/ask-mock", response_model=AIResponse)
 async def ask_ai_mock(request: QuestionRequest):
     try:
-        # dapatkan atau buat session ID
         session_id = request.session_id
         if not session_id:
             session_id = str(uuid.uuid4())
         
-        # dapatkan atau inisialisasi context percakapan
         if session_id not in conversation_sessions:
             conversation_sessions[session_id] = ConversationContext()
         
@@ -1375,80 +1155,19 @@ async def ask_ai_mock(request: QuestionRequest):
         
         question = request.question
         
-        # validasi input - jika terlalu sedikit karakter atau gibberish
         if len(question.strip()) < 2:
             return AIResponse(
                 response="Pertanyaanmu terlalu singkat. Coba tanyakan lebih detail tentang diriku, seperti hobi, proyek, atau keahlian yang kumiliki.",
                 session_id=session_id
             )
         
-        # deteksi gibberish
         if is_gibberish(question):
             response = generate_gibberish_response()
             context.update("gibberish", question, response)
             return AIResponse(response=response, session_id=session_id)
         
         category = categorize_question(question, context)
-        
-        # variasi pembuka yang lebih natural
-        pembuka = [
-            "Hai! ",
-            "Oke, ",
-            "Hmm, soal itu... ",
-            "Menarik pertanyaannya! ",
-            "Kalau ditanya soal itu, ",
-            "Ah, ",
-            "Well, "
-        ]
-        
-        # penanganan khusus untuk pertanyaan tentang item spesifik yang pernah disebutkan
-        if context and context.mentioned_items:
-            for item, responses in specific_follow_up_responses.items():
-                if re.search(r'\b' + re.escape(item) + r'\b', question.lower()) and item in context.mentioned_items:
-                    response = random.choice(responses)
-                    full_response = random.choice(pembuka) + response
-                    
-                    # update context
-                    context.update(category, question, full_response)
-                    
-                    return AIResponse(response=full_response, session_id=session_id)
-        
-        # penanganan khusus untuk follow-up question mengenai item tertentu
-        if context and any(item in question.lower() for item in context.mentioned_items) and is_follow_up_question(question, context):
-            # deteksi item yang direferensikan
-            referenced_items = [item for item in context.mentioned_items if item in question.lower()]
-            
-            if referenced_items:
-                for item in referenced_items:
-                    # update item reference count
-                    context.referenced_items[item] += 1
-                
-                # untuk item yang tidak memiliki respons khusus tapi direferensikan
-                if category == "makanan_favorit":
-                    responses = [
-                        f"Soal makanan street food Indonesia, aku memang penggemarnya! Dari martabak, sate, gorengan, hingga ketoprak, semuanya enak. Di Jakarta banyak spot street food menarik yang sering kujelajahi saat malam hari. Menurutku street food Indonesia itu unik dengan bumbu-bumbu kompleks tapi harga tetap terjangkau.",
-                        f"Street food Indonesia memang juara! Mau itu martabak manis dengan toppingnya yang melimpah, sate ayam dengan bumbu kacangnya yang gurih, atau ketoprak dengan tekstur lontongnya yang pas, semuanya bikin nagih. Aku paling suka jelajah street food di sekitar Jakarta, dan kadang sambil coding marathon."
-                    ]
-                    response = random.choice(responses)
-                    full_response = random.choice(pembuka) + response
-                    
-                    # update context
-                    context.update(category, question, full_response)
-                    
-                    return AIResponse(response=full_response, session_id=session_id)
-                
-                elif category == "lagu_favorit":
-                    responses = [
-                        f"Tentang lagu favorit, aku memang suka banget lagu-lagu ballad seperti 'Without You' dari Air Supply atau 'Sekali Ini Saja' dari Glenn Fredly. Ada sesuatu dari melodinya yang bikin nyaman dan liriknya yang mengena. Kalau lagi coding, biasanya aku lebih suka dengerin lo-fi beats atau soundtrack film yang nggak terlalu mengganggu konsentrasi.",
-                        f"Untuk musik, seleraku cukup beragam! Dari lagu Indonesia seperti 'Sekali Ini Saja' Glenn Fredly sampai lagu barat seperti 'Without You' Air Supply. Genre favoritku adalah pop 90an dan ballad yang liriknya dalam. Saat ngoding, playlist lo-fi atau instrumental jadi pilihan utama biar tetap fokus."
-                    ]
-                    response = random.choice(responses)
-                    full_response = random.choice(pembuka) + response
-                    
-                    # update context
-                    context.update(category, question, full_response)
-                    
-                    return AIResponse(response=full_response, session_id=session_id)
+        question_intent = detect_question_intent(question, context)
         
         # jika pertanyaan tidak jelas, minta klarifikasi
         if category == "unclear_question":
@@ -1456,365 +1175,24 @@ async def ask_ai_mock(request: QuestionRequest):
             context.update(category, question, response)
             return AIResponse(response=response, session_id=session_id)
         
-        # respons untuk pertanyaan personal
-        if category.startswith("personal_"):
-            redirects = {
-                "personal_relationship": [
-                    "Waduh, aku nggak bisa jawab soal kehidupan pribadi kayak gitu hehe. Yang jelas, saat ini aku lagi fokus banget sama karir di data science. Lagi seru ngulik beberapa proyek algoritma seperti Rush Hour Puzzle Solver yang pakai algoritma UCS, Greedy, A*, dan Dijkstra.",
-                    "Hmm, aku kurang nyaman bahas hal-hal personal seperti itu. Aku lebih suka cerita tentang proyek Rush Hour Puzzle Solver yang sedang kukerjakan. Ini proyek yang menantang karena perlu implementasi algoritma pathfinding dengan visualisasi interaktif.",
-                    "Hehe, aku nggak bisa jawab pertanyaan pribadi begitu. Aku lebih suka fokus ke pengembangan skill di bidang data science. Belakangan ini lagi mendalami pandas dan scikit-learn untuk analisis data."
-                ],
-                "personal_financial": [
-                    "Wah, maaf aku nggak bisa share info finansial seperti itu. Yang bisa aku ceritakan, aku sekarang fokus di data science dan pengembangan algoritma. Proyek terbaru yang kukerjakan adalah Rush Hour Puzzle Solver dengan implementasi berbagai algoritma pathfinding.",
-                    "Hmm, soal finansial aku kurang nyaman untuk bahas. Aku lebih senang cerita tentang proyek data science dan pengembangan algoritma seperti Rush Hour Puzzle Solver yang mengimplementasikan UCS, Greedy Best-First Search, A*, dan Dijkstra."
-                ],
-                "personal_contact": [
-                    "Maaf, aku nggak bisa share info kontak personal. Kalau mau tau lebih banyak tentang proyekku, aku lagi fokus di algoritma pencarian untuk game puzzle seperti Little Alchemy 2 Solver yang mengimplementasikan BFS dan DFS.",
-                    "Hmm, untuk informasi kontak pribadi aku nggak bisa share ya. Aku senang kalau kamu tertarik dengan kerjaan dan proyekku di bidang data science."
-                ],
-                "personal_age": [
-                    "Hehe, soal umur dan tanggal lahir itu agak personal ya. Yang jelas, aku udah cukup lama berkecimpung di dunia data science dan coding, sekitar 2 tahun pengalaman di pengembangan web dan 1 tahun di data science.",
-                    "Daripada bahas umur yang agak personal, mending aku cerita kalau aku punya pengalaman sekitar 2 tahun pengalaman di pengembangan web dan 1 tahun di data science dan lagi fokus mengembangkan skill di data science."
-                ],
-                "personal_religion": [
-                    "Untuk hal-hal pribadi seperti itu, aku kurang nyaman membahasnya. Kalau soal profesional, aku bisa cerita kalau aku fokus di data science dan lagi mengerjakan beberapa proyek menarik tentang algoritma pencarian."
-                ]
-            }
-            
-            # pilih respons sesuai kategori personal, atau gunakan default jika kategori tidak spesifik
-            if category in redirects:
-                responses = redirects[category]
-            else:
-                responses = [
-                    "Hmm, itu pertanyaan yang agak personal, jadi aku nggak bisa jawab dengan spesifik. Yang bisa aku share, aku fokus di bidang data science dan lagi seru mengerjakan beberapa proyek algoritma menarik seperti Rush Hour Puzzle Solver dan Algoritma Pencarian Little Alchemy 2.",
-                    "Maaf, untuk hal-hal personal seperti itu aku kurang nyaman membahasnya. Tapi aku senang sharing tentang proyek-proyek data science dan algoritma yang sedang kukerjakan seperti Rush Hour Puzzle Solver yang menggunakan berbagai algoritma pathfinding."
-                ]
-                
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
+        # generate respons yang lebih interactive
+        response_text = generate_interactive_response(question, category, context)
         
-        # respons berdasarkan kategori yang lebih spesifik
-        elif category == "keahlian":
-            responses = [
-                "Aku paling jago di bidang Python, Data Science, dan Next.js. Terutama untuk data science, aku senang menggunakan pandas dan scikit-learn untuk analisis data. Selain itu, aku juga cukup mahir dengan Python yang kugunakan hampir setiap hari.",
-                "Skill utamaku ada di data science dan frontend development. Untuk data science, aku sering pakai Python dengan pandas dan matplotlib untuk visualisasi. Di sisi frontend, Next.js jadi tool favorit untuk bikin aplikasi web interaktif.",
-                "Kalau skill teknis, aku cukup percaya diri dengan data science yang sudah kudalami selama 1 tahun. Framework yang sering kupakai adalah pandas, scikit-learn, dan matplotlib untuk visualisasi data."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "proyek":
-            responses = [
-                "Proyek yang paling kubanggakan adalah Rush Hour Puzzle Solver. Program ini menyelesaikan puzzle Rush Hour menggunakan algoritma pathfinding seperti UCS, Greedy Best-First Search, A*, dan Dijkstra. Dilengkapi dengan CLI dan GUI untuk visualisasi solusi. Proyek ini mengajarkan banyak hal tentang kompleksitas algoritma pencarian dan struktur data yang efisien.",
-                "Salah satu proyek favoritku adalah Algoritma Pencarian Little Alchemy 2. Ini proyek implementasi BFS, DFS, dan Bidirectional Search untuk mencari kombinasi recipe dalam permainan. Rasanya puas banget pas algoritma berhasil menemukan kombinasi resep yang optimal.",
-                "Aku pernah bikin Rush Hour Puzzle Solver yang cukup menantang. Program ini menyelesaikan puzzle Rush Hour menggunakan algoritma pathfinding seperti UCS, Greedy Best-First Search, A*, dan Dijkstra. Proyek ini jadi salah satu portofolio utama yang sering kutunjukkan ke potential employer karena kompleksitas algoritmanya."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "tantangan_proyek":
-            responses = [
-                "Tantangan terbesar dalam proyek Rush Hour Puzzle Solver adalah mengoptimalkan algoritma A* dengan heuristik custom agar performa lebih baik. Tadinya algoritma lambat banget untuk puzzle kompleks, tapi setelah optimasi, waktu komputasi berkurang hingga 80%. Tantangan lainnya adalah visualisasi state puzzle yang interaktif dengan library grafis yang terbatas.",
-                "Saat mengerjakan Algoritma Pencarian Little Alchemy 2, tantangan utamanya ada di memaksimalkan efisiensi algoritma untuk pencarian kombinasi recipe yang jumlahnya ratusan. Aku harus implementasi Bidirectional search untuk mengatasi bottleneck pada graf hubungan recipe yang super kompleks. Hasilnya, pencarian jadi jauh lebih cepat dibanding BFS standar.",
-                "Di proyek IQ Puzzler Pro Solver, tantangan terberatnya adalah state space yang sangat besar karena banyaknya kombinasi yang mungkin. Awalnya, algoritma brute force standard selalu crash karena stack overflow. Akhirnya, berhasil mengatasinya dengan implementasi backtracking dengan pruning yang super efisien."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-
-        elif category == "hobi":
-            hobby = random.choice(user_profile['hobi'])
-            responses = [
-                f"Di luar coding, aku suka banget {hobby.lower()}. Khususnya untuk membaca, aku suka novel fantasi seperti Omniscient Reader Viewpoint. Selain itu, aku juga hobi jelajah street food di sekitar Jakarta dan traveling ke destinasi lokal kalau ada waktu luang.",
-                f"Kalau lagi senggang, biasanya aku {hobby.lower()}. Untuk novel, aku suka baca genre fantasi dan sci-fi, terutama novel Omniscient Reader Viewpoint yang plotnya keren banget. Aku juga suka jelajah berbagai street food Indonesia dan traveling ke tempat-tempat yang belum pernah kukunjungi.",
-                f"Hobi utamaku adalah {hobby.lower()} dan menjelajahi street food Indonesia. Aku suka baca novel fantasi seperti Omniscient Reader Viewpoint yang ceritanya unik. Traveling juga jadi cara refreshing favoritku sambil coba-coba kuliner lokal di berbagai daerah."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "pendidikan":
-            responses = [
-                "Aku masih kuliah di ITB jurusan Teknik Informatika, sekarang lagi semester 4 nih. Sebelumnya, aku sekolah di SD Islam Al Azhar 23 Jatikramat, SMP Islam Al Azhar 9 Kemang Pratama, dan SMA Negeri 5 Bekasi. Masuk ITB karena memang tertarik banget sama teknologi dan ilmu komputer.",
-                "Saat ini aku masih mahasiswa semester 4 di Teknik Informatika ITB. Dulu aku berjuang keras belajar untuk bisa lolos seleksi SBMPTN. Sebelumnya bersekolah di SD Islam Al Azhar 23, SMP Islam Al Azhar 9, dan SMAN 5 Bekasi. Alhamdulillah keterima di Teknik Informatika yang memang jadi cita-citaku.",
-                "Aku masih kuliah semester 4 di ITB jurusan Teknik Informatika. Jenjang pendidikan sebelumnya di SD Islam Al Azhar 23 Jatikramat, dilanjutkan ke SMP Islam Al Azhar 9 Kemang Pratama, lalu SMAN 5 Bekasi. Meskipun tugasnya banyak dan berat, tapi justru di ITB aku belajar banyak tentang problem-solving dan algoritma yang seru."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "mata_kuliah":
-            responses = [
-                "Pelajaran favoritku sejak dulu adalah Matematika. Di kuliah sekarang juga aku suka banget mata kuliah yang berhubungan dengan matematika dan algoritma. Ada kepuasan tersendiri saat bisa memecahkan problem matematika yang kompleks, dan ilmunya sangat berguna untuk data science yang membutuhkan analisis kuantitatif.",
-                "Aku paling suka mata kuliah Matematika, baik waktu sekolah maupun sekarang kuliah. Di ITB, mata kuliah matematika seperti Kalkulus, Aljabar Linear, dan Matematika Diskrit jadi fondasi penting untuk algoritma dan data science. Suka banget momen 'eureka' saat berhasil memecahkan soal matematika yang challenging.",
-                "Dari dulu aku memang suka Matematika. Di jurusan Teknik Informatika, kemampuan matematika sangat penting terutama untuk mata kuliah algoritma dan struktur data. Matematika ini juga sangat membantu dalam pemodelan dan analisis data di bidang data science yang sedang kufokuskan."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "data_science":
-            responses = [
-                "Data science adalah salah satu passion utamaku. Aku mulai belajar dari hal-hal sederhana seperti Excel dan visualisasi data dasar, lalu berkembang ke Python dengan pandas dan scikit-learn. Visualisasi data pakai matplotlib juga jadi bagian yang menyenangkan karena bisa mengubah angka menjadi insight yang mudah dipahami.",
-                "Di bidang data science, aku fokus pada pengolahan data dan visualisasi. Awalnya mulai dari Excel dan visualisasi sederhana, sekarang sudah pakai tools yang lebih advanced. Salah satu proyek menarik yang pernah kukerjakan adalah analisis data menggunakan pandas untuk menemukan pola dan tren pada dataset kompleks.",
-                "Sebagai data scientist, aku banyak menggunakan Python dengan library seperti pandas, numpy, dan scikit-learn. Perjalananku di data science dimulai dari Excel dan visualisasi data sederhana, yang kemudian berkembang ke analisis yang lebih kompleks. Aku tertarik dengan bagaimana kita bisa mengekstrak informasi berharga dari data mentah."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "tools":
-            tools = list(user_profile['tools_favorit'].keys())
-            favorite_tool = random.choice(tools)
-            tool_desc = user_profile['tools_favorit'][favorite_tool]
-            
-            responses = [
-                f"Tool favoritku untuk coding adalah {favorite_tool} ({tool_desc}). Untuk data science, aku sering pakai Python dengan pandas dan matplotlib. VS Code jadi editor favorit dengan banyak extension yang mempercepat workflow. Jupyter Notebook juga essential untuk eksplorasi data dan eksperimen algoritma.",
-                f"Aku paling sering pakai {favorite_tool} untuk development. Selain itu, untuk data science aku selalu pakai pandas dan scikit-learn di Python. Git juga jadi tool wajib untuk version control, terutama saat kolaborasi dengan tim. Figma kadang kupakai untuk wireframing sederhana sebelum coding.",
-                f"Kalau soal tools, {favorite_tool} jadi andalanku. Untuk IDE, VS Code dengan berbagai extension-nya bikin produktivitas meningkat. Jupyter Notebook juga sangat membantu untuk eksplorasi data interaktif. Library seperti pandas, matplotlib, dan numpy jadi daily toolkit untuk pekerjaan data science."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "lagu_favorit":
-            responses = [
-                "Untuk lagu favorit, aku suka banget 'Without You' dari Air Supply, melodinya bikin nostalgia. Dari musisi Indonesia, aku suka lagu-lagu Glenn Fredly terutama 'Sekali Ini Saja' yang liriknya dalam banget. Saat coding, biasanya aku dengerin lagu oldies atau playlist lo-fi beats yang bikin fokus, kadang juga soundtrack film yang epic.",
-                "Selera musikku cukup beragam, tapi yang paling sering kudengarkan adalah lagu-lagu ballad seperti 'Without You' dari Air Supply dan 'My Heart Will Go On' dari Celine Dion. Untuk lagu Indonesia, aku suka 'Sekali Ini Saja' Glenn Fredly dan 'Separuh Aku' Noah. Kalau lagi ngoding biasanya putar lo-fi beats atau musik instrumental biar fokus.",
-                "Lagu favoritku 'Without You' dari Air Supply yang melodinya bikin nyaman, dan 'Sekali Ini Saja' dari Glenn Fredly untuk lagu Indonesia. Saat ngoding, biasanya aku dengerin playlist lo-fi atau soundtrack film yang nggak terlalu mengganggu konsentrasi. Genre yang paling sering kudengarkan adalah pop 90an dan ballad yang liriknya mengena."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "makanan_favorit":
-            foods = user_profile['makanan_favorit']['street_food']
-            favorite_food = random.choice(foods)
-            
-            responses = [
-                f"Kalau soal makanan, aku penggemar berat street food Indonesia! Favoritku sih pasti {favorite_food} dan juga sate ayam yang pake bumbu kacang. Di Jakarta, aku sering banget berburu street food di malam hari, dari mulai gorengan, ketoprak, sampai batagor. Ada kepuasan tersendiri nyobain makanan jalanan yang authentic dan berinteraksi langsung sama penjualnya.",
-                f"Aku suka banget street food Indonesia! Yang jadi favorit nomor satu adalah {favorite_food}, tapi aku juga doyan banget batagor dan ketoprak. Menurutku street food Indonesia itu unik dan punya cita rasa yang nggak ada duanya. Rasanya kaya dan bumbu-bumbunya kompleks, tapi harganya tetap terjangkau. Perfect untuk nemenin sesi coding marathon!",
-                f"Soal kuliner, aku ini fans berat street food Indonesia. Paling suka {favorite_food}, tapi juga doyan banget sate ayam dan berbagai jenis gorengan. Jakarta punya banyak spot street food keren yang sering kujelajahi kalau lagi butuh inspirasi atau sekedar refreshing dari rutinitas coding. Makanan jalanan itu punya cerita dan karakter tersendiri yang bikin nagih."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "prestasi":
-            achievement = random.choice(user_profile['prestasi'])
-            
-            responses = [
-                f"Salah satu pencapaian yang cukup kubanggakan adalah {achievement}. Ini jadi bukti bahwa kerja keras dan passion di bidang data science dan algoritma akan membuahkan hasil. Pengalaman jadi asisten praktikum juga mengajarkan banyak tentang cara menjelaskan konsep teknis dengan lebih mudah dipahami.",
-                f"Aku pernah meraih {achievement} yang jadi motivasi untuk terus berkarya. Pencapaian ini mengajarkanku tentang pentingnya kolaborasi dan inovasi dalam teknologi data. Kontribusi ke proyek open source juga membuka jaringan dengan developer lain yang punya minat sama.",
-                f"Yang cukup memorable adalah waktu {achievement}. Rasanya jadi validasi atas upaya yang selama ini kulakukan dan membuatku semakin percaya diri dengan arah karir di data science. Kompetisi tersebut menguji kemampuan problem-solving dan implementasi algoritma dalam deadline yang ketat."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "lomba":
-            responses = [
-                "Aku pernah ikut beberapa lomba, tapi yang paling berkesan adalah Datavidia UI. Lomba ini berkesan karena tingkat kesulitannya yang kompleks dalam analisis data dan machine learning. Kami harus mengolah dataset besar dengan noise, membuat feature engineering kreatif, dan mengoptimalkan model dalam waktu terbatas.",
-                "Datavidia UI adalah lomba yang paling berkesan buatku. Lombanya menantang banget karena harus menghasilkan prediksi akurat dari data yang super berantakan. Tim kami harus lembur 2 hari untuk preprocessing data dan fine-tuning model. Meskipun nggak juara, pengalaman dan skillset baru yang kudapat sangat berharga.",
-                "Pernah ikut Datavidia UI yang menurutku jadi lomba paling menantang. Challenge-nya soal kompleksitas data yang harus dianalisis dan keterbatasan waktu. Saat itu kami menghadapi dataset dengan banyak missing values dan outliers yang bikin pusing. Tapi justru dari lomba ini aku belajar banyak teknik cleaning dan preprocessing data."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "karakter":
-            responses = [
-                "Teman-teman biasanya menggambarkan aku sebagai orang yang kreatif, analitis, detail-oriented, dan suka belajar hal baru. Aku juga termasuk orang yang mudah berkenalan dengan orang baru, tidak terlalu pemalu atau introvert. Dalam tim, aku suka membantu mencari solusi dari masalah-masalah teknis.",
-                "Aku cenderung mudah bergaul dan berkenalan dengan orang baru, jadi bukan tipe yang pemalu. Karakterku kreatif, analitis, detail-oriented, dan selalu ingin belajar hal baru. Temen-temen bilang aku orangnya problem solver yang suka memecah masalah kompleks jadi bagian-bagian yang lebih mudah ditangani.",
-                "Aku bukan orang yang pemalu, malah cenderung extrovert dan mudah berkenalan dengan orang baru. Karakterku adalah kreatif, analitis, detail-oriented, dan selalu penasaran untuk belajar teknologi baru. Dalam diskusi kelompok, aku biasanya aktif menyumbang ide dan mencoba memahami perspektif semua orang."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "portofolio_tech":
-            responses = [
-                "Portofolio ini dibangun pakai teknologi modern dengan Next.js, TypeScript, dan Tailwind CSS di frontend, serta Python FastAPI di backend. Komponen UI-nya menggunakan Shadcn UI dan ada efek animasi smooth dari Framer Motion. Fitur utamanya adalah asisten AI yang menjawab pertanyaan tentang profilku, ditenagai oleh OpenAI API di backend.",
-                "Website portfolio ini dibuat dengan stack Next.js dan TypeScript untuk frontend, dengan styling Tailwind CSS dan komponen Shadcn UI yang rapi. Backend-nya pakai Python FastAPI yang ngehubungin ke OpenAI API. Aku suka kombinasi ini karena Next.js sangat powerful untuk frontend dan Python gampang untuk integrasi AI.",
-                "Tech stack buat portofolio ini cukup modern: Next.js + TypeScript + Tailwind CSS untuk frontend, dengan tambahan komponen Shadcn UI yang elegan. Backend-nya pakai Python FastAPI yang terhubung ke OpenAI API. Deploment frontend di Vercel dan backend di Railway. Desainnya mengikuti prinsip mobile-first dengan UI/UX yang clean dan responsif."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "rencana":
-            responses = [
-                "Ke depannya, setelah lulus aku ingin fokus memperdalam keahlian di bidang data science dan algoritma, lulus dengan prestasi terbaik, dan berkarir di perusahaan teknologi terkemuka. Dalam 5 tahun ke depan, targetku jadi data science specialist yang bisa memimpin proyek-proyek analisis data skala besar.",
-                "Rencanaku setelah lulus nanti adalah fokus memperdalam keahlian di bidang data science dan algoritma, lulus dengan prestasi terbaik, dan berkarir di perusahaan teknologi terkemuka. Dalam 5 tahun, aku pengen jadi expert di bidang data engineering dan analytics yang bisa memberikan impact nyata bagi bisnis.",
-                "Dalam 5 tahun ke depan, aku berencana untuk menjadi professional di bidang data science dengan spesialisasi di data visualization dan predictive analytics. Fokus utamaku sekarang adalah memperdalam keahlian di bidang data science dan algoritma, lulus dengan prestasi terbaik, dan mendapatkan posisi bagus di perusahaan teknologi terkemuka."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "lokasi":
-            responses = [
-                "Aku tinggal di Jakarta, Indonesia. Kota ini punya komunitas developer dan data scientist yang aktif dengan banyak meetup dan diskusi menarik. Meskipun kemacetannya kadang bikin stres, tapi Jakarta punya akses bagus ke banyak perusahaan teknologi dan startup.",
-                "Saat ini base-ku di Jakarta, Indonesia. Cukup strategis untuk kerja remote maupun onsite dengan berbagai perusahaan teknologi dan data. Banyak acara tech dan data science meetup yang sering kuhadiri buat networking dan update knowledge terbaru di industri.",
-                "Domisili di Jakarta, Indonesia. Suka dengan dinamika kota ini meskipun kadang macetnya bikin frustrasi. Tapi dekat dengan banyak tech hub dan komunitas IT yang aktif. Jakarta juga punya banyak coworking space keren yang jadi tempat alternatif saat bosan kerja di rumah."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "pekerjaan":
-            responses = [
-                "Saat ini aku masih mahasiswa semester 4 di ITB jurusan Teknik Informatika. Belum bekerja full-time, tapi aku aktif sebagai asisten praktikum untuk mata kuliah Berpikir komputasional. Sambil kuliah juga sering bikin proyek-proyek coding untuk portfolio.",
-                "Aku masih fokus kuliah di semester 4 Teknik Informatika ITB. Untuk menambah pengalaman, aku jadi asisten praktikum dan kadang ngambil project kecil-kecilan. Masih panjang perjalanannya, tapi aku enjoy banget belajar dan bikin proyek yang menantang.",
-                "Belum kerja secara formal karena masih kuliah semester 4 di ITB. Aku aktif di beberapa kegiatan kampus, jadi panitia Arkavidia, dan pernah ikut beberapa lomba terkait hackathon. Fokus utama sekarang masih kuliah sambil mengembangkan skill teknis."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "pengalaman":
-            responses = [
-                "Meskipun masih kuliah semester 4, aku punya 2 tahun pengalaman di pengembangan web dan 1 tahun di data science. Pengalamanku di data science didapat dari proyek kuliah dan lomba-lomba yang kuikuti. Seru banget bisa belajar langsung dengan praktek.",
-                "Pengalaman coding dan data science-ku udah sekitar 2 tahun pengembangan web dan 1 tahun di data science. Meskipun masih kuliah semester 4, aku aktif ikut lomba, bikin proyek, dan jadi asisten praktikum yang nambah banyak jam terbang.",
-                "Aku punya pengalaman sekitar 2 tahun pengembangan web dan 1 tahun di data science. Sebagai mahasiswa semester 4, aku dapat banyak pengalaman dari tugas kuliah, lomba-lomba seperti hackathon, dan proyek-proyek kecil yang kukerjakan di luar kuliah."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "manajemen_waktu":
-            responses = [
-                "Manajemen waktuku di kuliah cukup ketat karena pace di ITB yang super cepat. Aku membagi waktu antara mengerjakan proyek, tugas besar, dan belajar untuk ujian dengan sangat disiplin. Biasanya aku pakai teknik Pomodoro dan time blocking untuk fokus, dan selalu reservasi waktu untuk istirahat dan hobi biar nggak burnout.",
-                "Di ITB, manajemen waktu jadi skill krusial buat survive. Aku punya sistem pembagian waktu antara kuliah, tugas, proyek, dan aktivitas lain dengan prioritas yang jelas. Kalender digital dan reminder jadi sahabatku. Kadang aku bikin 'time audit' untuk lihat apakah aktivitasku sesuai dengan prioritas dan goals.",
-                "Kunci manajemen waktuku adalah disiplin dan konsistensi. Aku membagi waktu dengan cermat antara mengerjakan proyek, tugas besar, dan persiapan ujian. Hal yang membantu adalah menyiapkan todo list di malam hari untuk esok, dan selalu reservasi 'deep work time' tanpa gangguan untuk tugas yang butuh konsentrasi penuh."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "manajemen_stres":
-            responses = [
-                "Kuliah di ITB memang udah sering melatih ketahanan menghadapi tekanan, jadi handling stres jadi skill wajib. Cara favoritku mengatasi stres adalah dengan menonton film horror/romance atau drama Korea untuk sejenak escape dari dunia coding. Kadang juga sempatkan olahraga ringan atau jalan-jalan singkat untuk me-refresh pikiran.",
-                "Buat handle stres, aku punya jurus jitu: nonton film horror atau romance, atau drama Korea yang seru. Kuliah di ITB dengan tekanannya yang tinggi bikin aku terbiasa dengan deadline dan ekspektasi tinggi. Aku juga percaya pentingnya deep breathing dan short breaks saat coding marathon untuk menjaga kejernihan pikiran.",
-                "Dengan tekanan akademik yang tinggi di ITB, aku belajar mengelola stres dengan baik. Biasanya aku menyempatkan menonton film horror/romance atau drama Korea sebagai escape. Kadang juga melakukan hobby lain seperti membaca novel. Menurut pengalamanku, penting untuk punya 'mental shutdown time' di antara sesi coding intensif."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "cerita_kuliah":
-            responses = [
-                "Cerita menarik pas kuliah adalah waktu aku mengalami culture shock karena banyak yang sudah menggeluti dunia IT dari kecil sedangkan aku baru bergabung. Ini bikin aku merasa harus bekerja berkali-kali lipat dari yang lainnya. Tak hanya itu, aku juga kaget ternyata pace pembelajaran materi di ITB sangat amat cepat sehingga harus membagi waktu dengan sangat baik.",
-                "Salah satu cerita yang bikin aku kaget pas awal kuliah adalah melihat teman-teman yang sudah jago coding sejak SMP, sementara aku baru mulai serius di SMA. Ini jadi motivation shock yang bikin aku belajar lebih keras. Pace pembelajaran di ITB juga gila-gilaan cepat, dalam seminggu bisa numpuk beberapa tucil (tugas kecil) dan tubes (tugas besar) yang harus dikerjakan paralel.",
-                "Pengalaman culture shock terbesar di ITB adalah melihat gap kemampuan yang lebar antar mahasiswa. Banyak yang sudah expert di bidang IT sejak kecil, sementara aku baru mulai. Pace kuliah juga bikin aku kaget, dosen bisa ngejelasin materi super kompleks dalam waktu singkat dan langsung kasih tugas yang bikin melongo. Tapi justru tekanan ini yang bikin aku tumbuh lebih cepat secara teknis."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "organisasi":
-            responses = [
-                "Aku mengikuti beberapa kepanitiaan, salah satu kepanitiaan yang besar itu Arkavidia dan aku mengisi di divisi academy-nya yang mengelola bootcamp path data science. Pengalaman ini mengajarkan banyak tentang manajemen event, koordinasi tim, dan sharing knowledge tentang data science ke peserta dengan berbagai level pengalaman.",
-                "Pengalaman berorganisasi yang berkesan adalah jadi panitia Arkavidia di divisi academy untuk path data science. Tanggung jawabku termasuk menyusun kurikulum bootcamp, koordinasi dengan pemateri, dan memastikan peserta mendapat pengalaman belajar yang optimal. Seru banget bisa sharing knowledge sambil networking dengan profesional di industri.",
-                "Salah satu pengalaman berorganisasi yang signifikan adalah terlibat di kepanitiaan Arkavidia, event IT tahunan ITB. Aku di divisi academy yang mengurusi bootcamp data science. Peran ini mengajarkan soft skill berharga seperti leadership, komunikasi, dan project management yang ternyata sangat berguna melengkapi technical skill di dunia IT."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "belajar_mandiri":
-            responses = [
-                "Untuk belajar mandiri, aku punya strategi mix and match: online courses (Coursera, edX) untuk struktur materi, dokumentasi resmi untuk referensi teknis, dan proyek-proyek kecil untuk praktek. Yang penting adalah konsistensi daily practice, bahkan kalau cuma 20-30 menit sehari. Aku juga suka join forum diskusi dan komunitas untuk dapet insight dari sesama learner.",
-                "Belajar mandiri adalah skill vital buat developer. Strategiku adalah kombinasi structured learning via online courses dan exploratory learning dengan bereksperimen pada proyek pribadi. Aku mencatat konsep-konsep penting di Notion yang selalu kureview secara berkala. Selalu set small achievable goals biar ada momentum dan rasa progress.",
-                "Kunci belajar mandiri menurut pengalamanku adalah active learning: jangan cuma nonton tutorial, tapi langsung praktek dengan coding. Aku suka bikin proyek kecil untuk mengaplikasikan konsep baru yang kupelajari. Tetap update dengan trends via newsletter dan podcast teknis. Paling penting adalah growth mindset dan sabar dengan diri sendiri saat proses belajar."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "belajar_kegagalan":
-            responses = [
-                "Pelajaran paling berharga dari kegagalan akademikku adalah jangan selalu menuruti coping mechanism diri sendiri. Dulu aku sering procrastinate dan burnout karena mengerjakan tugas last minute. Sekarang aku lebih aware akan pola self-sabotage dan berusaha membangun habits yang lebih sehat. Setiap kegagalan adalah data points untuk improve strategy belajar.",
-                "Kegagalan akademik mengajarkan aku tentang bahaya menuruti coping mechanism yang tidak sehat. Dulu, saat stres dengan deadline, aku sering masuk ke cycle procrastination-panic-rush yang buruk. Sekarang aku belajar menghadapi ketidaknyamanan di awal dan start early pada tugas besar. Kegagalan juga mengajarkan pentingnya seek help dan kolaborasi.",
-                "Hal terpenting yang kupelajari dari kegagalan akademik adalah jangan terjebak pada coping mechanism yang destruktif. Aku dulu terjebak dalam pola menunda pekerjaan, lalu kerja marathon yang berujung burnout. Sekarang kupecah tugas besar jadi task-task kecil yang manageable, dan selalu refleksi apa yang worked dan tidak worked dari approach sebelumnya."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "kerja_tim":
-            responses = [
-                "Dalam kerja tim, aku biasanya liat dulu situasinya: apakah ada yang mau menginisiasi jadi leader, kalau benar-benar gaada baru aku ambil peran itu. Kalau ada konflik, aku cenderung jadi mediator yang fokus ke akar masalah, bukan ke personality. Aku percaya clear communication dan explicit expectations adalah kunci untuk meminimalisir kebanyakan konflik tim.",
-                "Gaya kerja tim aku cukup adaptif. Aku lebih suka observe dulu dinamika kelompok, baru ambil peran leader kalau memang dibutuhkan. Untuk konflik, pendekatanku adalah focus on facts, not fault. Aku mencoba mencari common ground dan memastikan semua pihak merasa didengar. Task tracking dan dokumentasi yang rapi juga sangat membantu mengurangi miscommunication.",
-                "Aku mengatasi konflik dalam tim dengan pendekatan problem-solving: identifikasi masalah real-nya, cari potential solutions, dan diskusikan trade-offs. Gaya kerjaku adalah observe dulu, baru ambil inisiatif jadi leader kalau memang tidak ada yang mengambil peran tersebut. Aku juga percaya pentingnya clear role dan responsibility distribution dari awal untuk menghindari overlaps dan gaps."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "kebiasaan_ngoding":
-            responses = [
-                "Terkadang aku memang lebih produktif ngoding malam-malam. Entah kenapa pikiran lebih jernih dan fokus saat dunia lebih sepi. Tapi tetap kuatur supaya tidak mengganggu siklus tidur. Aku biasanya setup IDE dengan dark mode, punya playlist instrumental khusus, dan pastikan punya snack sehat di dekat meja untuk coding marathon.",
-                "Iya, aku kadang lebih suka ngoding malam hari karena merasa lebih encer buat mikir dan lebih tenang tanpa distraksi. Tapi nggak selalu sih, biasanya tergantung complexity task-nya. Untuk project yang butuh kreativitas dan problem-solving, malam memang jadi waktu favorit. Setup coding space yang nyaman dan music lofi jadi pendukung penting productive night coding.",
-                "Kalau ditanya soal ngoding malam, kadang memang iya. Ada sweet spot dimana otak serasa lebih clear dan creative di jam-jam tertentu di malam hari. Tapi aku juga nggak mau jadi night owl terus karena impacts ke kesehatan. Jadi sekarang lebih ke arah flexible: simple tasks di siang, complex problems di malam, dan tetap prioritasin cukup istirahat."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        elif category == "moto_hidup":
-            responses = [
-                "Moto hidupku adalah 'Menuju tak terbatas dan melampauinya'. Bagiku ini adalah filosofi tentang selalu berusaha melampaui batasan yang ada, baik dalam pengembangan teknologi maupun pengembangan diri. Moto ini mengingatkanku untuk tidak cepat puas dengan pencapaian dan selalu mencari cara untuk mengembangkan skill dan knowledge lebih jauh lagi.",
-                "Aku punya moto 'Menuju tak terbatas dan melampauinya'. Ini mengingatkanku untuk selalu push boundaries dan jangan terjebak dalam comfort zone. Dalam konteks data science dan programming, moto ini jadi pengingat untuk terus belajar teknologi baru dan mencari solusi yang lebih efisien untuk masalah yang kuhadapi.",
-                "'Menuju tak terbatas dan melampauinya' adalah moto yang kupegang. Yap, memang terinspirasi Buzz Lightyear, tapi maknanya dalam bagiku. Ini tentang mindset bahwa selalu ada ruang untuk improvement dan inovasi. Dalam karir tech yang super fast-paced, moto ini jadi reminder untuk stay hungry for knowledge dan berani mengambil challenge baru."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
-            
-        else:
-            # fallback untuk pertanyaan umum
-            responses = [
-                "Aku seorang mahasiswa dengan fokus di data science. Aku suka mengeksplorasi teknologi baru dan menerapkannya dalam proyek-proyek nyata. Oh iya, salah satu quote favoritku: 'Code is like humor. When you have to explain it, it's bad.'",
-                "Secara singkat, aku kreatif, analitis, detail-oriented, dan suka belajar hal baru yang bekerja sebagai mahasiswa. Fokus utamaku ada di data science dan frontend development. Saat ini sedang mengerjakan beberapa proyek algoritma yang menarik.",
-                "Aku adalah developer dan data scientist yang berbasis di Jakarta, Indonesia dengan spesialisasi di analisis data dan visualisasi. Selalu berusaha mengembangkan diri dan mencari tantangan baru di dunia teknologi."
-            ]
-            
-            response = random.choice(responses)
-            full_response = random.choice(pembuka) + response
+        # normalisasi teks respons
+        normalized_response = normalize_text(response_text)
         
-        if random.random() > 0.7:
-            penutup = [
-                " Ada lagi yang mau kamu tanyakan?",
-                " Gimana menurutmu?",
-                " Moga membantu ya!",
-                " Ada yang masih kurang jelas?"
-            ]
-            full_response += random.choice(penutup)
-        
-        # normalisasi teks respons untuk menghindari spasi berlebih
-        normalized_response = normalize_text(full_response)
-        
-        # update context
         context.update(category, question, normalized_response)
         
-        # generate potential follow-up questions untuk next interaction
-        potential_followups = context.get_suggested_followup_questions(3)
-        logger.info(f"Generated potential followups: {potential_followups}")
-        
         return AIResponse(response=normalized_response, session_id=session_id)
+        
     except Exception as e:
         logger.error(f"error saat memproses permintaan mock: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Terjadi kesalahan: {str(e)}")
 
-# rute health check
 @app.get("/")
 async def root():
     return {"message": "AI Portfolio Backend berjalan. Gunakan endpoint /ask untuk bertanya."}
 
-# endpoint untuk mendapatkan followup questions yang direkomendasikan
 @app.get("/suggested-followups/{session_id}")
 async def get_suggested_followups(session_id: str):
     if session_id not in conversation_sessions:
@@ -1825,7 +1203,6 @@ async def get_suggested_followups(session_id: str):
     
     return {"suggested_followups": suggested_followups}
 
-# menjalankan aplikasi
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
