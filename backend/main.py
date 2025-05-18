@@ -87,12 +87,11 @@ user_profile = {
         "Git": "Version control untuk kolaborasi dan tracking proyek",
         "Figma": "Untuk wireframing dan design",
     },
-    "hobi": ["Membaca buku sci-fi", "Traveling ke destinasi lokal", "Makan", "Hiking di akhir pekan"],
+    "hobi": ["Membaca buku bergenre horror", "Traveling ke destinasi lokal", "Jelajah streetfood"],
     "hobi_detail": {
-        "Membaca": "Buku favorit termasuk 'Dune' dan karya-karya Ted Chiang",
-        "Traveling": "Sudah mengunjungi 8 provinsi di Indonesia dan berencana menambah lagi",
-        "Fotografi": "Memiliki akun Instagram khusus untuk hasil foto urban landscape",
-        "Hiking": "Mendaki Gunung Rinjani pada 2022 dan Gunung Semeru pada 2023"
+        "Membaca": "Buku favorit termasuk 'IT' dan karya-karya Stephen King",
+        "Traveling": "Sudah mengunjungi 4 provinsi di Indonesia dan berencana menambah lagi",
+        "Fotografi": "Memiliki akun Instagram khusus untuk foto-foto traveling"
     },
     "proyek": [
         "Algoritma Pencarian Little Alchemy 2 - Implementasi BFS, DFS, dan Bidirectional Search",
@@ -181,6 +180,8 @@ def categorize_question(question: str) -> str:
         return "personal_religion"
         
     # kategori umum
+    elif any(phrase in question_lower for phrase in ["lagu kesukaan", "lagu favorit", "musik favorit", "musik kesukaan"]) or any(word in question_lower for word in ["lagu", "musik", "dengerin", "dengarkan", "dengerin", "playlist"]):
+        return "lagu_favorit"
     elif any(word in question_lower for word in ["keahlian", "skill", "kemampuan", "ahli", "bisa apa", "bisa apa saja", "jago"]):
         return "keahlian"
     elif any(word in question_lower for word in ["proyek", "project", "karya", "portfolio", "aplikasi", "buat apa", "telah dibuat", "terbaik", "unggulan"]):
@@ -193,7 +194,7 @@ def categorize_question(question: str) -> str:
         return "pendidikan"
     elif any(word in question_lower for word in ["pelajaran favorit", "mata kuliah favorit", "mata pelajaran"]):
         return "mata_kuliah"
-    elif any(word in question_lower for word in ["lokasi", "tinggal", "domisili", "alamat", "kota", "daerah"]):
+    elif any(word in question_lower for word in ["lokasi", "tinggal", "domisili", "alamat", "kota", "daerah", "rumah"]):
         return "lokasi"
     elif any(word in question_lower for word in ["prestasi", "pencapaian", "award", "penghargaan", "juara"]):
         return "prestasi"
@@ -202,7 +203,7 @@ def categorize_question(question: str) -> str:
     elif any(word in question_lower for word in ["data", "data science", "analisis data", "big data", "statistik", "machine learning", "ml"]):
         return "data_science"
     elif any(word in question_lower for word in ["ai", "artificial intelligence", "kecerdasan buatan"]):
-        return "data_science"  # redirect AI questions to data science
+        return "data_science" 
     elif any(word in question_lower for word in ["tool", "alat", "software", "library", "framework", "favorit", "suka pakai"]):
         return "tools"
     elif any(word in question_lower for word in ["karakter", "kepribadian", "sifat", "tipe", "mbti", "orangnya", "pemalu", "extrovert", "introvert"]):
@@ -231,8 +232,6 @@ def categorize_question(question: str) -> str:
         return "kerja_tim"
     elif any(word in question_lower for word in ["ngoding", "coding", "kode", "malam", "produktif"]):
         return "kebiasaan_ngoding"
-    elif any(word in question_lower for word in ["lagu", "musik", "dengerin", "dengarkan", "playlist"]):
-        return "lagu_favorit"
     elif any(word in question_lower for word in ["moto", "motto", "quotes", "quote", "kutipan", "kata-kata"]):
         return "moto_hidup"
     else:
@@ -904,9 +903,9 @@ async def ask_ai_mock(request: QuestionRequest):
             
         elif category == "lagu_favorit":
             responses = [
-                "Untuk saat ini, aku seneng dengerin Without You dari Air Supply, liriknya dalem dan relate banget sama aku. Kalau lagu Indonesia, aku suka denger Glenn Fredly kayak 'Sekali Ini Saja'. Pas lagi ngoding, aku condong ke lagu oldies atau 'old but gold' dengan artis kayak Bee Gees, Westlife, dan Backstreet Boys yang nggak terlalu ganggu fokus.",
                 "Lagu favoritku saat ini adalah Without You dari Air Supply, liriknya bener-bener mengena. Juga suka lagu-lagu Glenn Fredly seperti 'Sekali Ini Saja'. Ketika ngoding, playlist-ku biasanya berisi lagu-lagu klasik dari era 90an dan 2000an seperti hits dari Bee Gees, Westlife, atau Backstreet Boys yang bikin mood coding jadi lebih enak.",
-                "Aku pecinta musik oldies! Saat ngoding suka dengerin Bee Gees, Westlife, atau Backstreet Boys yang bikin nostalgia. Lagu favorit saat ini Without You dari Air Supply karena liriknya yang dalam dan relate dengan pengalaman pribadi. Untuk lagu Indonesia, aku suka karya-karya Glenn Fredly terutama 'Sekali Ini Saja' yang melodinya bikin nyaman."
+                "Untuk saat ini, aku seneng dengerin Without You dari Air Supply, liriknya dalem dan relate banget sama aku. Kalau lagu Indonesia, aku suka denger Glenn Fredly kayak 'Sekali Ini Saja'. Pas lagi ngoding, aku condong ke lagu oldies atau 'old but gold' dengan artis kayak Bee Gees, Westlife, dan Backstreet Boys.",
+                "Aku pecinta musik oldies! Saat ngoding suka dengerin Bee Gees, Westlife, atau Backstreet Boys yang bikin nostalgia. Lagu favorit saat ini Without You dari Air Supply. Untuk lagu Indonesia, aku suka karya-karya Glenn Fredly terutama 'Sekali Ini Saja' yang melodinya bikin nyaman."
             ]
             
             response = random.choice(responses)
