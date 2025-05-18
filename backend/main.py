@@ -9,7 +9,7 @@ import requests
 import random
 import re
 import uuid
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 import difflib
 import time
 from collections import defaultdict
@@ -46,9 +46,7 @@ for origin in additional_origins:
     if origin not in allowed_origins:
         allowed_origins.append(origin)
 
-# tampilkan semua origins yang diizinkan
-print(f"Final allowed origins: {allowed_origins}")
-
+# tambahkan CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -71,18 +69,28 @@ class AIResponse(BaseModel):
 class ConversationContext:
     def __init__(self):
         self.last_category: Optional[str] = None
-        self.mentioned_items: Set[str] = set()  # gunakan set untuk efisiensi
+        self.mentioned_items: Set[str] = set()
         self.previous_responses: List[str] = []
         self.questions_history: List[str] = []
         self.last_updated: float = time.time()
-        self.referenced_items: Dict[str, int] = defaultdict(int)  # track frekuensi referensi
+        self.referenced_items: Dict[str, int] = defaultdict(int)
+        self.conversation_topics: List[str] = []  # track topik percakapan
+        self.potential_followups: Dict[str, List[str]] = {}  # simpan kemungkinan followup
     
     def update(self, category: str, question: str, response: str = None):
         self.last_category = category
         self.questions_history.append(question)
+        
         if response:
             self.previous_responses.append(response)
             self.extract_mentioned_items(response)
+            
+            # tambahkan topik percakapan
+            if category not in ["unclear_question", "general"]:
+                self.conversation_topics.append(category)
+                
+            # generate potential follow-up questions
+            self.generate_potential_followups(category, question, response)
         
         # track item yang direferensikan dalam pertanyaan
         for item in self.mentioned_items:
@@ -93,16 +101,15 @@ class ConversationContext:
     
     def extract_mentioned_items(self, response: str):
         # ekstrak item-item penting yang disebutkan dalam respons
-        # ini akan digunakan untuk mendeteksi referensi di pertanyaan selanjutnya
         
-        # ekstrak makanan yang disebutkan - dengan word boundaries
+        # ekstrak makanan yang disebutkan
         food_patterns = [
             r'\b(martabak|sate|gorengan|ketoprak|batagor|nasi padang|soto|bakso|keripik|cimol|basreng)\b',
             r'street food (\w+)',
             r'makanan (\w+)'
         ]
         
-        # ekstrak lagu/artis yang disebutkan - dengan word boundaries
+        # ekstrak lagu/artis yang disebutkan
         music_patterns = [
             r'\b(without you|air supply|glenn fredly|sekali ini saja|noah|separuh aku|celine dion|my heart will go on)\b',
             r'lagu "([^"]+)"',
@@ -110,13 +117,20 @@ class ConversationContext:
             r'\b(lo-fi|instrumental|soundtrack)\b'
         ]
         
-        # ekstrak hobi yang disebutkan - dengan word boundaries
+        # ekstrak hobi yang disebutkan
         hobby_patterns = [
             r'\b(membaca|novel|omniscient reader|street food|traveling|wisata|destinasi)\b',
             r'hobi ([a-zA-Z\s]+)'
         ]
         
-        all_patterns = food_patterns + music_patterns + hobby_patterns
+        # ekstrak skill/teknologi yang disebutkan
+        tech_patterns = [
+            r'\b(python|next\.js|react|data science|java|tailwind|typescript|fastapi|machine learning|pandas)\b',
+            r'bahasa (\w+)',
+            r'framework (\w+)'
+        ]
+        
+        all_patterns = food_patterns + music_patterns + hobby_patterns + tech_patterns
         
         for pattern in all_patterns:
             matches = re.findall(pattern, response.lower())
@@ -124,14 +138,90 @@ class ConversationContext:
                 for match in matches:
                     if isinstance(match, tuple):
                         for item in match:
-                            if item and len(item) > 3:  # filter out short or empty matches
+                            if item and len(item) > 3:
                                 self.mentioned_items.add(item.strip())
                     elif match and len(match) > 3:
                         self.mentioned_items.add(match.strip())
+                        
+    def generate_potential_followups(self, category: str, question: str, response: str):
+        # generate kemungkinan follow-up questions berdasarkan kategori dan respons
+        
+        followups = {
+            "makanan_favorit": [
+                "Kenapa kamu suka {item}?",
+                "Di mana tempat {item} favoritmu?",
+                "Seberapa sering kamu makan {item}?",
+                "Apa yang kamu suka dari {item}?",
+                "{item} itu seperti apa sih?"
+            ],
+            "lagu_favorit": [
+                "Kenapa kamu suka lagu {item}?",
+                "Kapan pertama kali kamu dengar {item}?",
+                "Apa lirik favoritmu dari {item}?",
+                "Ada rekomendasi lagu mirip {item}?",
+                "Apa lagu lain dari {artist} yang kamu suka?"
+            ],
+            "hobi": [
+                "Sejak kapan kamu suka {item}?",
+                "Berapa sering kamu {item}?",
+                "Apa yang menarik dari {item}?",
+                "Bisa cerita pengalaman menarik saat {item}?",
+                "Apa tantangan dalam {item}?"
+            ],
+            "keahlian": [
+                "Bagaimana kamu belajar {item}?",
+                "Apa proyek {item} yang pernah kamu buat?",
+                "Kenapa kamu tertarik dengan {item}?",
+                "Berapa lama kamu sudah menguasai {item}?",
+                "Tools apa yang kamu pakai untuk {item}?"
+            ],
+            "proyek": [
+                "Apa tantangan terbesar dalam membuat {item}?",
+                "Teknologi apa yang kamu pakai untuk {item}?",
+                "Berapa lama kamu mengerjakan {item}?",
+                "Apa yang kamu pelajari dari {item}?",
+                "Bagaimana feedback orang lain tentang {item}?"
+            ]
+        }
+        
+        # deteksi item-item yang disebutkan dalam response
+        items_in_response = []
+        for item in self.mentioned_items:
+            if item in response.lower():
+                items_in_response.append(item)
+                
+        # untuk kategori yang ada di daftar followups, generate pertanyaan lanjutan
+        if category in followups and items_in_response:
+            potential_questions = []
+            for item in items_in_response:
+                for template in followups[category]:
+                    try:
+                        if '{item}' in template:
+                            potential_questions.append(template.format(item=item))
+                        elif '{artist}' in template and category == "lagu_favorit":
+                            # coba temukan artist dari item
+                            artist_match = re.search(r'(.+) dari (.+)', response.lower())
+                            if artist_match:
+                                artist = artist_match.group(2).strip()
+                                potential_questions.append(template.format(artist=artist))
+                    except:
+                        # skip jika format gagal
+                        continue
+                        
+            # simpan potential followups
+            if potential_questions:
+                self.potential_followups[category] = potential_questions[:5]  # batasi 5 kemungkinan
 
     def get_most_referenced_items(self, limit=3):
         # mendapatkan item yang paling sering direferensikan
         return sorted(self.referenced_items.items(), key=lambda x: x[1], reverse=True)[:limit]
+    
+    def get_suggested_followup_questions(self, limit=3):
+        # dapatkan suggested followup questions berdasarkan kategori percakapan terakhir
+        if not self.last_category or self.last_category not in self.potential_followups:
+            return []
+            
+        return self.potential_followups[self.last_category][:limit]
 
 # penyimpanan session percakapan
 conversation_sessions = {}
@@ -289,7 +379,73 @@ specific_follow_up_responses = {
     ]
 }
 
-# ekstrak item-item untuk pengenalan konteks
+# fungsi untuk mengecek apakah input adalah gibberish (teks tidak masuk akal)
+def is_gibberish(text: str) -> bool:
+    # cek apakah input terlalu pendek dan tidak masuk akal
+    if len(text) < 3:
+        return False  # terlalu pendek untuk dianggap gibberish
+        
+    # hitung rasio konsonan berturut-turut
+    text = text.lower()
+    consonants = "bcdfghjklmnpqrstvwxyz"
+    vowels = "aeiou"
+    
+    # hitung berapa banyak konsonan berturut-turut
+    max_consecutive_consonants = 0
+    current_consonants = 0
+    
+    for char in text:
+        if char in consonants:
+            current_consonants += 1
+            max_consecutive_consonants = max(max_consecutive_consonants, current_consonants)
+        else:
+            current_consonants = 0
+    
+    # hitung entropy (keacakan) kata
+    char_counts = {}
+    for char in text:
+        if char.isalpha():
+            char_counts[char] = char_counts.get(char, 0) + 1
+    
+    # jika konsonan berturut-turut terlalu banyak atau terlalu sedikit vokal
+    vowel_count = sum(char_counts.get(v, 0) for v in vowels)
+    total_chars = sum(char_counts.values())
+    
+    # pola deteksi gibberish
+    if max_consecutive_consonants >= 4:  # terlalu banyak konsonan berturut-turut
+        return True
+    
+    if total_chars > 0 and vowel_count / total_chars < 0.1:  # terlalu sedikit vokal
+        return True
+    
+    # deteksi pola berulang yang tidak masuk akal (seperti 'asdasdasd')
+    for length in range(2, min(5, len(text) // 2 + 1)):
+        for start in range(len(text) - length * 2 + 1):
+            if text[start:start+length] == text[start+length:start+length*2]:
+                return True
+    
+    # cek word coherence (apakah ada kata yang masuk akal)
+    words = text.split()
+    valid_words = set([
+        "hai", "halo", "apa", "siapa", "kenapa", "dimana", "kapan", "bagaimana", "mengapa",
+        "kamu", "aku", "saya", "dia", "mereka", "kita", "yang", "dan", "atau", "tapi",
+        "untuk", "dari", "dengan", "tanpa", "tentang", "karena", "sebab", "akibat",
+        "makanan", "hobi", "lagu", "favorit", "suka", "bisa", "coba", "tolong", 
+        "proyek", "coding", "ngoding", "program", "aplikasi", "website", "skill", "keahlian",
+        "belajar", "kuliah", "sekolah", "kampus", "itb", "informatika", "komputer",
+        "data", "science", "python", "react", "javascript", "java", "next", "nextjs"
+    ])
+    
+    # hitung berapa kata yang masuk akal
+    valid_word_count = sum(1 for word in words if word.lower() in valid_words)
+    
+    # jika tidak ada kata yang masuk akal dan lebih dari 2 kata
+    if len(words) > 2 and valid_word_count == 0:
+        return True
+        
+    return False
+
+# fungsi untuk ekstrak context items
 def extract_context_items():
     context_items = set()
     
@@ -362,27 +518,13 @@ follow_up_words = [
     "lantas", "oh", "wow", "keren", "menarik", "mantap", "asik", "enak", "bagus",
     "oh ya", "oh iya", "selain itu", "selain", "tapi", "wah", "suka", "favorit",
     "lebih", "paling", "banget", "emang", "emangnya", "memang", "memangnya", "kok",
-    "ya", "iya", "yup", "gitu", "gitu ya", "masa", "masa sih", "beneran"
+    "ya", "iya", "yup", "gitu", "gitu ya", "masa", "masa sih", "beneran", "serius",
+    "juga", "sama", "terus", "lalu", "habis itu", "maksudnya", "seperti apa"
 ]
-
-# fungsi untuk deteksi typo dan perbaikan kata
-def fuzzy_match(word: str, word_list: List[str], threshold: float = 0.75) -> Optional[str]:
-    matches = difflib.get_close_matches(word.lower(), word_list, n=1, cutoff=threshold)
-    return matches[0] if matches else None
-
-# preprocessing pertanyaan
-def preprocess_question(question: str) -> str:
-    # lowercase
-    question = question.lower()
-    # hapus karakter khusus
-    question = re.sub(r'[^\w\s]', ' ', question)
-    # normalisasi spasi
-    question = re.sub(r'\s+', ' ', question).strip()
-    return question
 
 # fungsi untuk mengecek apakah pertanyaan adalah follow-up dari konteks sebelumnya (revisi)
 def is_follow_up_question(question: str, context: ConversationContext) -> bool:
-    question = preprocess_question(question)
+    question = question.lower()
     
     # pertanyaan pendek (1-3 kata) kemungkinan besar adalah follow-up
     if len(question.split()) <= 3:
@@ -407,7 +549,7 @@ def is_follow_up_question(question: str, context: ConversationContext) -> bool:
 
 # fungsi untuk mendeteksi referensi ke item yang disebutkan sebelumnya (revisi)
 def detect_item_references(question: str, context: ConversationContext) -> Optional[str]:
-    question = preprocess_question(question)
+    question = question.lower()
     
     # cek apakah pertanyaan mereferensikan item yang disebutkan sebelumnya
     referenced_items = []
@@ -429,6 +571,10 @@ def detect_item_references(question: str, context: ConversationContext) -> Optio
             # prioritas untuk item hobi spesifik
             elif item in ["membaca", "novel", "omniscient reader", "traveling"]:
                 return "hobi"
+            
+            # prioritas untuk item teknologi/keahlian spesifik
+            elif item in ["python", "next.js", "react", "data science", "java", "coding"]:
+                return "keahlian"
     
         # backup: cek berdasarkan kategori umum
         all_food_items = []
@@ -452,8 +598,86 @@ def detect_item_references(question: str, context: ConversationContext) -> Optio
     
     return None
 
-# fungsi untuk mengkategorikan pertanyaan yang lebih robust dengan konteks (revisi)
+# fungsi untuk deteksi typo dan perbaikan kata
+def fuzzy_match(word: str, word_list: List[str], threshold: float = 0.75) -> Optional[str]:
+    matches = difflib.get_close_matches(word.lower(), word_list, n=1, cutoff=threshold)
+    return matches[0] if matches else None
+
+# preprocessing pertanyaan
+def preprocess_question(question: str) -> str:
+    # lowercase
+    question = question.lower()
+    # hapus karakter khusus
+    question = re.sub(r'[^\w\s]', ' ', question)
+    # normalisasi spasi
+    question = re.sub(r'\s+', ' ', question).strip()
+    return question
+
+# fuzzy category detection untuk typo dalam kategori
+def fuzzy_category_detection(question: str) -> Tuple[Optional[str], float]:
+    question = preprocess_question(question)
+    
+    # daftar kategori yang dicari
+    category_terms = {
+        "makanan": "makanan_favorit",
+        "makanan favorit": "makanan_favorit",
+        "street food": "makanan_favorit",
+        "kuliner": "makanan_favorit",
+        "martabak": "makanan_favorit",
+        "sate": "makanan_favorit",
+        "ketoprak": "makanan_favorit",
+        
+        "lagu": "lagu_favorit",
+        "musik": "lagu_favorit",
+        "lagu favorit": "lagu_favorit",
+        "dengar musik": "lagu_favorit",
+        "dengerin musik": "lagu_favorit",
+        "playlist": "lagu_favorit",
+        
+        "hobi": "hobi",
+        "hobi favorit": "hobi",
+        "kegiatan": "hobi",
+        "membaca": "hobi",
+        "novel": "hobi",
+        "traveling": "hobi",
+        
+        "keahlian": "keahlian",
+        "skill": "keahlian",
+        "bisa apa": "keahlian",
+        "kemampuan": "keahlian",
+        "coding": "keahlian",
+        "programming": "keahlian",
+        
+        "proyek": "proyek",
+        "project": "proyek",
+        "karya": "proyek",
+        "aplikasi": "proyek",
+        "portofolio": "proyek",
+        "portfolio": "proyek"
+    }
+    
+    best_match = None
+    highest_score = 0.0
+    
+    # cek setiap term dengan fuzzy matching
+    for term, category in category_terms.items():
+        if term in question:
+            return category, 1.0  # exact match
+            
+        # cek fuzzy match
+        words = question.split()
+        for word in words:
+            if len(word) >= 3:  # hanya pertimbangkan kata yang cukup panjang
+                similarity = difflib.SequenceMatcher(None, word, term).ratio()
+                if similarity > 0.8 and similarity > highest_score:  # threshold tinggi untuk term pendek
+                    highest_score = similarity
+                    best_match = category
+    
+    return best_match, highest_score
+
+# mengkategorikan pertanyaan yang lebih robust dengan konteks (revisi)
 def categorize_question(question: str, context: ConversationContext = None) -> str:
+    # preprocessing pertanyaan
     original_question = question
     question = preprocess_question(question)
     question_words = question.split()
@@ -463,6 +687,17 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
     if context:
         logger.info(f"Context - Last category: {context.last_category}")
         logger.info(f"Context - Mentioned items: {context.mentioned_items}")
+    
+    # deteksi gibberish (teks tidak masuk akal)
+    if is_gibberish(question):
+        logger.info(f"Detected gibberish: {question}")
+        return "gibberish"
+        
+    # fuzzy category detection untuk typo dalam kategori
+    fuzzy_category, score = fuzzy_category_detection(question)
+    if fuzzy_category and score > 0.8:
+        logger.info(f"Detected category via fuzzy matching: {fuzzy_category} (score: {score})")
+        return fuzzy_category
     
     # penanganan khusus untuk pertanyaan follow-up yang jelas mereferensikan item tertentu
     if context and context.mentioned_items:
@@ -493,7 +728,7 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
     
     # pengecekan kategori personal dulu
     personal_checks = [
-        (["pacar", "jodoh", "pacaran", "pasangan", "gebetan", "nikah", "menikah", "single", "lajang", "status hubungan"], "personal_relationship"),
+        (["pacar", "jodoh", "pacaran", "pasangan", "gebetan", "wanita", "nikah", "menikah", "single", "lajang", "status hubungan"], "personal_relationship"),
         (["gaji", "salary", "penghasilan", "bayaran", "uang", "kekayaan", "sebulan", "pendapatan"], "personal_financial"),
         (["alamat rumah", "tinggal dimana", "alamat lengkap", "nomor", "kontak", "pribadi", "telepon", "hp"], "personal_contact"),
         (["umur", "usia", "tanggal lahir", "kapan lahir", "kelahiran", "berapa tahun"], "personal_age"),
@@ -587,12 +822,24 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
             logger.info(f"Selected category with score: {top_category}")
             return top_category[0]
     
-    # cek apakah pertanyaan kurang jelas
+    # cek apakah pertanyaan terlalu pendek atau kurang jelas
     if len(question.split()) < 3:
         return "unclear_question"
     
     # default ke general jika tidak ada kategori yang cocok
     return "general"
+
+# fungsi untuk respons ketika input tidak masuk akal (gibberish)
+def generate_gibberish_response() -> str:
+    responses = [
+        "Hmm, maaf aku tidak mengerti pertanyaanmu. Bisa diulangi dengan kata-kata yang lebih jelas?",
+        "Sepertinya ada typo dalam pesanmu. Bisa tolong diperjelas? Kamu bisa tanya tentang hobi, musik favorit, atau makanan favoritku.",
+        "Aku kurang paham maksudmu. Bisa ditulis ulang dengan lebih jelas? Misalnya tentang hobi, proyek, atau keahlianku.",
+        "Wah, aku bingung dengan pertanyaanmu. Mungkin ada kesalahan ketik? Coba tanyakan dengan cara lain tentang diriku.",
+        "Maaf, aku tidak mengerti apa yang kamu tulis. Apa kamu ingin bertanya tentang hobi, makanan favorit, atau proyek yang kukerjakan?",
+        "Pesanmu sepertinya tidak lengkap atau ada kesalahan ketik. Bisa tolong diperjelas? Aku bisa menjawab tentang diriku, keahlian, atau proyek-proyekku."
+    ]
+    return random.choice(responses)
 
 # fungsi untuk respons ketika pertanyaan tidak jelas
 def generate_clarification_response() -> str:
@@ -624,15 +871,26 @@ def create_context_aware_prompt(question: str, context: ConversationContext = No
     
     # tambah informasi tentang percakapan sebelumnya jika tersedia
     if context and (context.questions_history or context.mentioned_items):
+        previous_question = context.questions_history[-1] if context.questions_history else "Belum ada"
+        
         base_prompt += f"""
         Konteks percakapan:
         - Kategori terakhir dibahas: {context.last_category if context.last_category else "Belum ada"}
         - Item yang disebutkan sebelumnya: {', '.join(context.mentioned_items) if context.mentioned_items else "Belum ada"}
-        - Pertanyaan sebelumnya: {context.questions_history[-1] if context.questions_history else "Belum ada"}
+        - Pertanyaan sebelumnya: {previous_question}
         - Item yang direferensikan paling sering: {', '.join([item for item, count in context.get_most_referenced_items(2)]) if context.referenced_items else "Belum ada"}
         
         PENTING: Jika pertanyaan saat ini sepertinya mereferensikan atau follow-up dari percakapan sebelumnya, terutama jika ada referensi ke item yang disebutkan sebelumnya, pastikan untuk menjawab dalam konteks tersebut.
         """
+        
+        # tambahkan kemungkinan pertanyaan follow-up yang sudah diantisipasi
+        if context.potential_followups and context.last_category in context.potential_followups:
+            base_prompt += f"""
+            Kemungkinan pertanyaan follow-up yang diharapkan berdasarkan respons sebelumnya:
+            {json.dumps(context.potential_followups[context.last_category], indent=2, ensure_ascii=False)}
+            
+            PENTING: Jika pertanyaan pengguna mirip dengan salah satu pertanyaan yang diantisipasi di atas, berikan jawaban yang lebih spesifik dan lengkap.
+            """
     
     # penanganan khusus untuk follow-up item spesifik
     specific_item = None
@@ -651,6 +909,19 @@ def create_context_aware_prompt(question: str, context: ConversationContext = No
         
         Silahkan gunakan konten tersebut sebagai inspirasi atau pilih salah satu respons yang paling relevan.
         """
+    
+    # penanganan untuk input gibberish
+    if category == "gibberish":
+        base_prompt += f"""
+        Pertanyaan pengguna terdeteksi sebagai gibberish (teks tidak masuk akal). Berikan respons yang meminta pengguna untuk mengulangi pertanyaan dengan lebih jelas.
+        Jangan terlalu teknis dalam menjelaskan bahwa itu gibberish, tapi sarankan secara halus bahwa mungkin ada kesalahan ketik.
+        Tawarkan beberapa topik alternatif yang bisa ditanyakan.
+
+        Pertanyaan pengguna: {question}
+        
+        Jawab dengan bahasa Indonesia yang santai dan natural. Gunakan "aku" untuk merujuk diri sendiri.
+        """
+        return base_prompt
     
     # jika pertanyaan tidak jelas, minta klarifikasi
     if category == "unclear_question":
@@ -1023,6 +1294,13 @@ async def ask_ai(request: QuestionRequest):
         # log pertanyaan
         logger.info(f"pertanyaan diterima: {request.question}")
         
+        # validasi input - jika terlalu sedikit karakter atau gibberish
+        if len(request.question.strip()) < 2:
+            return AIResponse(
+                response="Pertanyaanmu terlalu singkat. Coba tanyakan lebih detail tentang diriku, seperti hobi, proyek, atau keahlian yang kumiliki.",
+                session_id=request.session_id or str(uuid.uuid4())
+            )
+        
         # dapatkan atau buat session ID
         session_id = request.session_id
         if not session_id:
@@ -1038,6 +1316,12 @@ async def ask_ai(request: QuestionRequest):
         # tentukan kategori
         category = categorize_question(request.question, context)
         logger.info(f"Kategori terdeteksi: {category}")
+        
+        # penanganan khusus untuk gibberish
+        if category == "gibberish":
+            response_text = generate_gibberish_response()
+            context.update(category, request.question, response_text)
+            return AIResponse(response=response_text, session_id=session_id)
         
         # penanganan khusus untuk item yang spesifik
         specific_item_response = None
@@ -1090,6 +1374,20 @@ async def ask_ai_mock(request: QuestionRequest):
         context = conversation_sessions[session_id]
         
         question = request.question
+        
+        # validasi input - jika terlalu sedikit karakter atau gibberish
+        if len(question.strip()) < 2:
+            return AIResponse(
+                response="Pertanyaanmu terlalu singkat. Coba tanyakan lebih detail tentang diriku, seperti hobi, proyek, atau keahlian yang kumiliki.",
+                session_id=session_id
+            )
+        
+        # deteksi gibberish
+        if is_gibberish(question):
+            response = generate_gibberish_response()
+            context.update("gibberish", question, response)
+            return AIResponse(response=response, session_id=session_id)
+        
         category = categorize_question(question, context)
         
         # variasi pembuka yang lebih natural
@@ -1497,8 +1795,15 @@ async def ask_ai_mock(request: QuestionRequest):
             full_response += random.choice(penutup)
         
         # normalisasi teks respons untuk menghindari spasi berlebih
-        normalized_response = normalize_text(full_response)        
+        normalized_response = normalize_text(full_response)
+        
+        # update context
         context.update(category, question, normalized_response)
+        
+        # generate potential follow-up questions untuk next interaction
+        potential_followups = context.get_suggested_followup_questions(3)
+        logger.info(f"Generated potential followups: {potential_followups}")
+        
         return AIResponse(response=normalized_response, session_id=session_id)
     except Exception as e:
         logger.error(f"error saat memproses permintaan mock: {str(e)}")
@@ -1508,6 +1813,17 @@ async def ask_ai_mock(request: QuestionRequest):
 @app.get("/")
 async def root():
     return {"message": "AI Portfolio Backend berjalan. Gunakan endpoint /ask untuk bertanya."}
+
+# endpoint untuk mendapatkan followup questions yang direkomendasikan
+@app.get("/suggested-followups/{session_id}")
+async def get_suggested_followups(session_id: str):
+    if session_id not in conversation_sessions:
+        raise HTTPException(status_code=404, detail="Session tidak ditemukan")
+    
+    context = conversation_sessions[session_id]
+    suggested_followups = context.get_suggested_followup_questions(3)
+    
+    return {"suggested_followups": suggested_followups}
 
 # menjalankan aplikasi
 if __name__ == "__main__":
