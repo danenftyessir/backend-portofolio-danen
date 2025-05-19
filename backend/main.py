@@ -68,22 +68,33 @@ class ConversationContext:
         self.referenced_items: Dict[str, int] = defaultdict(int)
         self.conversation_topics: List[str] = []
         self.potential_followups: Dict[str, List[str]] = {}
-        self.conversation_tone: str = "neutral"  # track tone dari conversation
+        self.conversation_tone: str = "neutral"
+        self.topic_transitions: List[Tuple[str, str, float]] = []  # (from_category, to_category, timestamp)
+        self.last_response_category: Optional[str] = None
     
     def update(self, category: str, question: str, response: str = None):
+        # deteksi transisi topik
+        if self.last_category and self.last_category != category:
+            self.topic_transitions.append((self.last_category, category, time.time()))
+            # hapus potential followups jika topik berubah
+            if category not in ["general", "unclear_question", "gibberish"]:
+                self.potential_followups.clear()
+        
         self.last_category = category
         self.questions_history.append(question)
         
         if response:
             self.previous_responses.append(response)
+            self.last_response_category = category
             self.extract_mentioned_items(response)
             
             if category not in ["unclear_question", "general"]:
                 self.conversation_topics.append(category)
                 
-            self.generate_potential_followups(category, question, response)
+            # hanya generate followups jika kategori sama atau related
+            if not self.topic_transitions or self.topic_transitions[-1][1] == category:
+                self.generate_potential_followups(category, question, response)
         
-        # detect tone dari pertanyaan
         self.detect_conversation_tone(question)
         
         for item in self.mentioned_items:
@@ -92,11 +103,56 @@ class ConversationContext:
         
         self.last_updated = time.time()
     
+    def is_context_relevant(self, new_category: str) -> bool:
+        """cek apakah konteks sebelumnya relevan untuk pertanyaan baru"""
+        if not self.last_category:
+            return False
+        
+        # jika kategori sama persis
+        if new_category == self.last_category:
+            return True
+        
+        # category groups yang related
+        related_categories = {
+            'keahlian': ['teknologi', 'proyek', 'tools'],
+            'teknologi': ['keahlian', 'proyek'],
+            'proyek': ['keahlian', 'teknologi'], 
+            'makanan_favorit': [],  # makanan standalone
+            'lagu_favorit': [],     # musik standalone
+            'hobi': [],             # hobi standalone
+        }
+        
+        # cek apakah kategori terkait
+        if self.last_category in related_categories:
+            if new_category in related_categories[self.last_category]:
+                return True
+        
+        # cek followup patterns
+        if new_category.endswith('_followup'):
+            base_category = new_category.replace('_followup', '')
+            return base_category == self.last_category
+        
+        # jika beda topik dan bukan followup, konteks tidak relevan
+        return False
+    
+    def should_use_context_in_prompt(self, new_category: str) -> bool:
+        """tentukan apakah konteks harus dimasukkan dalam prompt"""
+        if not self.is_context_relevant(new_category):
+            return False
+        
+        # jangan gunakan konteks jika sudah terlalu banyak transisi
+        if len(self.topic_transitions) > 3:
+            return False
+        
+        # jangan gunakan konteks jika transisi terakhir sudah lama
+        if self.topic_transitions and (time.time() - self.topic_transitions[-1][2]) > 300:  # 5 menit
+            return False
+        
+        return True
+    
     def detect_conversation_tone(self, question: str):
-        # deteksi tone conversation untuk adjustment response
         question_lower = question.lower()
         
-        # tone categories
         if any(word in question_lower for word in ["kenapa", "mengapa", "gimana", "bagaimana", "kok", "masa"]):
             self.conversation_tone = "inquisitive"
         elif any(word in question_lower for word in ["wah", "wow", "keren", "mantap", "bagus"]):
@@ -109,7 +165,6 @@ class ConversationContext:
             self.conversation_tone = "neutral"
     
     def extract_mentioned_items(self, response: str):
-        # ekstrak item-item penting yang disebutkan dalam respons
         food_patterns = [
             r'\b(martabak|sate|gorengan|ketoprak|batagor|nasi padang|soto|bakso|keripik|cimol|basreng)\b',
             r'street food (\w+)',
@@ -296,13 +351,10 @@ user_profile = {
         "komunikasi": "Terbuka dalam komunikasi, senang berdiskusi tentang ide dan konsep baru"
     },
     "prestasi": [
-        "Juara 2 Hackathon Nasional 2022",
-        "Asisten praktikum Berpikir Komputasional",
-        "Kontributor open source di beberapa proyek React"
+        "Asisten praktikum Berpikir Komputasional"
     ],
     "lomba": {
-        "Datavidia UI": "Pengalaman lomba data science yang paling berkesan karena kompleksitasnya yang menantang",
-        "Hackathon Nasional 2022": "Berhasil meraih juara 2 dengan implementasi solusi data-driven untuk masalah transportasi"
+        "Datathon UI": "Pengalaman lomba data science yang paling berkesan karena kompleksitasnya yang menantang"
     },
     "quotes_favorit": [
         "Code is like humor. When you have to explain it, it's bad.",
@@ -311,7 +363,7 @@ user_profile = {
     ],
     "moto": "Menuju tak terbatas dan melampauinya",
     "lagu_favorit": {
-        "Indonesia": ["Sekali Ini Saja - Glenn Fredly", "Separuh Aku - Noah", "Bukan Rayuan Gombal - Judika"],
+        "Indonesia": ["Sekali Ini Saja - Glenn Fredly", "Separuh Aku - Noah", "Cinta sudah lewat - Kahitna"],
         "Barat": ["Without You - Air Supply", "My Heart Will Go On - Celine Dion", "Perfect - Ed Sheeran"],
         "Genre": ["Pop 90an", "Ballad", "Oldies"],
         "Untuk_Coding": ["Lagu instrumental", "Lo-fi beats", "Soundtrack film"]
@@ -344,7 +396,7 @@ user_profile = {
 }
 
 def is_gibberish(text: str) -> bool:
-    if len(text) < 2:  # lebih permisif untuk pertanyaan singkat
+    if len(text) < 2:
         return False
         
     text = text.lower()
@@ -363,7 +415,7 @@ def is_gibberish(text: str) -> bool:
         valid_terms = ["python", "react", "java", "next", "hobi", "makanan", "lagu", "proyek"]
         return not any(term in text for term in valid_terms)
     
-    # pengecekan konsonan berturut-turut
+    # deteksi konsonan berturut-turut yang tidak wajar
     consonants = "bcdfghjklmnpqrstvwxyz"
     vowels = "aeiou"
     
@@ -386,22 +438,18 @@ def is_gibberish(text: str) -> bool:
     vowel_count = sum(char_counts.get(v, 0) for v in vowels)
     total_chars = sum(char_counts.values())
     
-    # deteksi konsonan berturut-turut yang tidak wajar
     if max_consecutive_consonants >= 4:
         return True
     
-    # deteksi rasio vokal yang tidak wajar
     if total_chars > 0 and vowel_count / total_chars < 0.1:
         return True
     
-    # apapun yang tersisa dianggap valid
     return False
 
-# fungsi untuk mendeteksi intent/sentiment dari pertanyaan
 def detect_question_intent(question: str, context: ConversationContext = None) -> str:
     question_lower = question.lower()
     
-    # challenging questions (mempertanyakan kemampuan)
+    # challenging questions
     challenging_patterns = [
         r'kenapa (?:saya|aku) harus',
         r'apa (?:yang )?membuat (?:kamu|anda)',
@@ -411,7 +459,7 @@ def detect_question_intent(question: str, context: ConversationContext = None) -
         r'(?:gak|tidak|nggak) (?:cukup|bisa)',
     ]
     
-    # reflective questions (minta pendapat/analisis)
+    # reflective questions
     reflective_patterns = [
         r'(?:gimana|bagaimana) (?:menurutmu|pendapatmu)',
         r'kamu (?:rasa|pikir|anggap)',
@@ -419,7 +467,7 @@ def detect_question_intent(question: str, context: ConversationContext = None) -
         r'apa (?:pendapat|opini)',
     ]
     
-    # comparison questions (membandingkan)
+    # comparison questions
     comparison_patterns = [
         r'(?:dibanding|dibandingkan)',
         r'lebih (?:baik|bagus)',
@@ -429,11 +477,14 @@ def detect_question_intent(question: str, context: ConversationContext = None) -
     
     # follow up questions
     followup_patterns = [
-        r'(?:terus|lalu|kemudian)',
+        r'(?:terus|lalu|kemudian) (?:gimana|bagaimana)',
         r'(?:selain|kecuali) (?:itu|dari)',
         r'balik ke',
         r'kembali ke',
-        r'oh (?:gitu|begitu)',
+        r'(?:emang|memang) (?:cukup|bisa)',
+        r'(?:yakin|serius) (?:gak|tidak)',
+        r'hanya (?:dengan|pakai)',
+        r'cuma (?:dengan|pakai)',
     ]
     
     for pattern in challenging_patterns:
@@ -448,20 +499,61 @@ def detect_question_intent(question: str, context: ConversationContext = None) -
         if re.search(pattern, question_lower):
             return "comparison"
     
-    for pattern in followup_patterns:
-        if re.search(pattern, question_lower):
-            return "followup"
+    # cek followup hanya jika ada konteks yang relevan
+    if context and context.is_context_relevant("followup"):
+        for pattern in followup_patterns:
+            if re.search(pattern, question_lower):
+                return "followup"
     
     return "neutral"
+
+def detect_specific_question_type(question: str, category: str) -> str:
+    """deteksi tipe pertanyaan spesifik dalam kategori"""
+    question_lower = question.lower()
+    
+    if category == "lagu_favorit":
+        if any(pattern in question_lower for pattern in ["kapan pertama", "pertama kali", "pertama dengar"]):
+            return "first_time_hearing"
+        elif any(pattern in question_lower for pattern in ["kenapa suka", "mengapa suka", "apa yang suka"]):
+            return "why_like"
+        elif any(pattern in question_lower for pattern in ["lirik favorit", "lirik kesukaan", "bagian favorit"]):
+            return "favorite_lyrics"
+        elif any(pattern in question_lower for pattern in ["rekomendasi", "recommend", "lagu lain", "mirip"]):
+            return "recommendation"
+        elif any(pattern in question_lower for pattern in ["arti", "makna", "bermakna"]):
+            return "meaning"
+    
+    elif category == "makanan_favorit":
+        if any(pattern in question_lower for pattern in ["kenapa suka", "mengapa suka", "apa yang suka"]):
+            return "why_like"
+        elif any(pattern in question_lower for pattern in ["di mana", "dimana", "tempat", "lokasi"]):
+            return "where_to_eat"
+        elif any(pattern in question_lower for pattern in ["seberapa sering", "berapa sering", "kapan makan"]):
+            return "frequency"
+        elif any(pattern in question_lower for pattern in ["rekomendasi", "recommend", "suggest"]):
+            return "recommendation"
+    
+    elif category == "hobi":
+        if any(pattern in question_lower for pattern in ["sejak kapan", "kapan mulai", "mulai kapan"]):
+            return "when_started"
+        elif any(pattern in question_lower for pattern in ["berapa sering", "seberapa sering"]):
+            return "frequency"
+        elif any(pattern in question_lower for pattern in ["apa menarik", "yang menarik", "kenapa suka"]):
+            return "what_interesting"
+        elif any(pattern in question_lower for pattern in ["pengalaman", "cerita", "momen"]):
+            return "experience_story"
+    
+    return "general"
 
 # categories keywords untuk deteksi yang lebih nuanced
 category_keywords = {
     "lagu_favorit": [
         "lagu", "musik", "dengerin", "dengarkan", "nyanyi", "penyanyi", "band", "playlist",
-        "genre", "album", "konser", "artist", "artis", "musisi", "spotify", "instrumental", 
+        "genre", "album", "jadul", "konser", "artist", "artis", "musisi", "spotify", "instrumental", 
         "mendengarkan", "lagu favorit", "lagu kesukaan", "musik favorit", "enak didengerin",
         "air supply", "glenn fredly", "without you", "sekali ini saja", "celine dion", 
-        "oldies", "lo-fi", "soundtrack", "pop", "ballad"
+        "oldies", "lo-fi", "soundtrack", "pop", "kapan pertama", "pertama kali dengar",
+        "kenapa suka", "lirik favorit", "rekomendasi lagu"
     ],
     "makanan_favorit": [
         "makanan", "makan", "masak", "sarapan", "makan siang", "makan malam", "kuliner", 
@@ -505,11 +597,8 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
     question_words = question.split()
     
     logger.info(f"Processing question: {question}")
-    if context:
-        logger.info(f"Context - Last category: {context.last_category}")
-        logger.info(f"Context - Mentioned items: {context.mentioned_items}")
     
-    # deteksi gibberish (teks tidak masuk akal)
+    # deteksi gibberish
     if is_gibberish(question):
         logger.info(f"Detected gibberish: {question}")
         return "gibberish"
@@ -534,24 +623,12 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
         if re.search(pattern, question):
             return "rekrutmen"
     
-    # deteksi follow-up dengan referensi ke percakapan sebelumnya
-    if context and context.questions_history:
-        followup_patterns = [
-            r'balik ke (?:sebelumnya|tadi)',
-            r'kembali ke (?:pertanyaan|topik) (?:sebelumnya|tadi)',
-            r'(?:lanjutan|kelanjutan) dari',
-            r'(?:terus|lalu) (?:gimana|bagaimana)',
-            r'(?:emang|memang) (?:cukup|bisa)',
-            r'(?:yakin|serius) (?:gak|tidak)',
-            r'hanya (?:dengan|pakai)',
-            r'cuma (?:dengan|pakai)',
-        ]
-        
-        for pattern in followup_patterns:
-            if re.search(pattern, question):
-                # gunakan kategori sebelumnya atau deteksi berdasarkan konten
-                if context.last_category:
-                    return context.last_category + "_followup"
+    if context:
+        # cek apakah ini followup berdasarkan pattern dan relevansi konteks
+        question_intent = detect_question_intent(question, context)
+        if question_intent == "followup" and context.is_context_relevant("followup"):
+            # tambahkan suffix followup hanya jika benar-benar followup
+            return context.last_category + "_followup" if context.last_category else "general"
     
     # pengecekan kategori personal
     personal_checks = [
@@ -586,16 +663,6 @@ def categorize_question(question: str, context: ConversationContext = None) -> s
             if ' ' in keyword and re.search(r'\b' + re.escape(keyword) + r'\b', question):
                 matches += 2
                 matched_words.append(keyword)
-        
-        # berikan bobot tambahan jika kategori sama dengan previous category
-        if context and context.last_category == category:
-            matches += 1
-        
-        # cek apakah kategori ini berkaitan dengan item yang disebutkan sebelumnya
-        if context and context.mentioned_items:
-            for item in context.mentioned_items:
-                if any(re.search(r'\b' + re.escape(item) + r'\b', keyword) for keyword in keywords):
-                    matches += 0.5
         
         word_category_counts[category] = matches
     
@@ -654,17 +721,20 @@ def generate_interactive_response(question: str, category: str, context: Convers
     # deteksi intent untuk konteks, tapi jangan ekspos ke user
     question_intent = detect_question_intent(question, context)
     
+    # deteksi tipe pertanyaan spesifik
+    specific_type = detect_specific_question_type(question, category)
+    logger.info(f"Specific question type: {specific_type}")
+    
     # opener yang natural tanpa format array
     simple_openers = [
-        "Oh iya,",
         "Soal itu,",
         "Hm,",
         "Kalau itu,",
         "",  # kadang langsung jawab tanpa opener
     ]
     
-    # untuk follow-up questions
-    if question_intent == "followup" and context and context.last_category:
+    # PERBAIKI: untuk follow-up questions, cek relevansi konteks dulu
+    if question_intent == "followup" and context and context.is_context_relevant(category):
         followup_openers = [
             "Oh, balik ke topik tadi ya?",
             "Iya, soal itu tadi...",
@@ -675,109 +745,192 @@ def generate_interactive_response(question: str, category: str, context: Convers
     else:
         opener = random.choice(simple_openers)
     
-    # generate content yang natural berdasarkan kategori
     # KATEGORI SERIUS - Response panjang dan detail
     if category == "rekrutmen":
         content_responses = [
-            # Variasi 1: Focus pada kombinasi teori-praktik
-            "Aku bawa kombinasi teori dan praktek di data science yang cukup solid. Udah terapin langsung di proyek kayak Rush Hour Puzzle Solver dengan implementasi algoritma pathfinding kompleks seperti UCS, A*, dan Dijkstra. Plus pengalaman dari berbagai lomba termasuk Datavidia UI yang ngasah kemampuan handle dataset kompleks, dan jadi asisten praktikum yang ngelatih communication skills. Yang bikin aku beda adalah dedikasi buat terus belajar teknologi baru dan nggak takut hadapi tantangan yang belum pernah dicoba sebelumnya.",
+            "Aku bawa kombinasi teori dan praktek di data science yang cukup solid. Udah terapin langsung di proyek kayak Rush Hour Puzzle Solver dengan implementasi algoritma pathfinding kompleks seperti UCS, A*, dan Dijkstra. Plus pengalaman dari berbagai lomba termasuk Datathon UI yang ngasah kemampuan handle dataset kompleks, dan jadi asisten praktikum yang ngelatih communication skills. Yang bikin aku beda adalah dedikasi buat terus belajar teknologi baru dan nggak takut hadapi tantangan yang belum pernah dicoba sebelumnya.",
             
-            # Variasi 2: Focus pada mindset problem-solving
             "Yang bikin aku menonjol adalah cara pendekatan masalah yang sistematis dan analitis. Dengan pengalaman 2 tahun web development dan 1 tahun fokus data science, aku udah develop mindset untuk breakdown complex problems jadi manageable pieces. Contohnya di proyek Little Alchemy Solver, aku harus implement BFS, DFS, dan Bidirectional Search untuk optimize recipe search di graph yang kompleks. Bukan cuma skill teknis yang solid, tapi juga kemampuan komunikasikan insight dan findings ke stakeholder dengan cara yang mudah dipahami. Plus track record akademik yang konsisten dan keterlibatan aktif di organisasi tech kayak Arkavidia.",
             
-            # Variasi 3: Focus pada track record
             "Track record aku di berbagai domain cukup membuktikan versatility dan konsistensi. Mulai dari academic projects yang challenging, participation di kompetisi data science, sampai kontribusi open source di proyek React. Yang paling menonjol adalah implementasi algoritma advanced di berbagai puzzle solver - dari state space optimization sampai heuristic design. Experience ini ngasih aku solid foundation dalam algorithm design dan performance tuning. Plus, background sebagai asisten praktikum dan active member di komunitas tech bikin aku comfortable dalam collaborative environment dan knowledge sharing.",
             
-            # Variasi 4: Focus pada passion dan learning agility
             "Passion aku di data science itu genuine dan bukan cuma trend following. Ini terbukti dari consistency dalam deliver hasil berkualitas, baik di tugas kuliah yang demanding, participation di lomba-lomba competitive, maupun contribution ke proyek open source. Yang jadi kekuatan utama adalah learning agility - aku cepat adapt dengan teknologi baru dan selalu penasaran sama challenge yang belum pernah encountered sebelumnya. Contohnya, dalam waktu singkat aku bisa master different algorithm paradigms dan apply mereka ke real-world problems dengan effective optimization strategies.",
             
-            # Variasi 5: Focus pada value yang dibawa
             "Aku nggak cuma bawa hard skills yang solid, tapi juga fresh perspective dari dunia akademik dan exposure ke latest research trends. Kombinasi theoretical knowledge di algorithm design dengan hands-on experience di practical implementation bikin aku bisa bridge gap antara research dan application. Skill set aku cover dari data preprocessing dengan pandas, modeling dengan scikit-learn, sampai full-stack development dengan Next.js. Yang penting, aku selalu fokus deliver actionable insights dan maintainable solutions, bukan cuma proof of concept yang impressive tapi susah di-scale.",
             
-            # Variasi 6: Focus pada collaborative approach
             "Aku tipe yang thrive dalam collaborative environment dan genuine enjoy sharing knowledge dengan team members. Experience sebagai asisten praktikum dan involvement di organizing committees ngajarin aku gimana cara effective communication dengan diverse backgrounds. Technical skills aku solid - proven di berbagai algorithmic projects dan consistent academic performance - tapi yang lebih valuable adalah ability untuk facilitate knowledge transfer dan mentor junior team members. Plus, aku always open untuk feedback dan continuous improvement, yang crucial dalam fast-paced tech environment.",
             
-            # Variasi 7: Focus pada unique combination
             "Kombinasi unik aku adalah strong academic foundation yang dibalance dengan practical project experience dan soft skills development. Aku nggak cuma understand algorithms secara theoretical, tapi udah implement dan optimize mereka untuk real-world constraints. Portfolio projects kayak IQ Puzzler Pro Solver dan Rush Hour Puzzle menunjukkan kemampuan handle complex state spaces dan develop efficient solutions. Plus, active involvement di tech community dan teaching experience bikin aku comfortable dengan knowledge dissemination dan cross-functional collaboration.",
             
-            # Variasi 8: Focus pada problem-solving capability  
             "Kelebihan utama aku adalah systematic approach dalam problem decomposition dan solution architecture. Terbukti dari success rate di berbagai challenging projects yang require both algorithmic thinking dan engineering practicality. Aku bisa efficiently analyze requirements, design optimal approaches, dan implement robust solutions yang scalable. Experience covering different domains - dari graph algorithms sampai web development - kasih aku versatile skill set yang applicable ke various business problems. Plus mindset yang always question assumptions dan explore alternative approaches untuk ensure optimal outcomes."
         ]
     
-    elif category in ["keahlian_followup", "pengalaman_followup"]:
-        if question_intent == "challenging":
-            content_responses = [
-                # Response detail untuk pertanyaan challenging tentang pengalaman
-                "'Cukup' itu memang relatif, tapi aku confident dengan depth dari pengalaman yang udah dijalani. Dalam 2-3 tahun terakhir, aku nggak cuma belajar surface level tapi bener-bener deep dive ke setiap technology stack dan methodology. Contohnya di Rush Hour Solver, aku spend significant time untuk optimize algorithm performance dari naive approach sampai sophisticated heuristic design. Setiap project ngajarin unique challenges - dari memory management di large state spaces sampai UI/UX considerations untuk complex visualizations. Plus, academic environment di ITB constantly expose aku ke cutting-edge research dan best practices yang immediately applicable ke practical problems.",
-                
-                "Fair point untuk questioning that. Learning curve di tech industry memang steep dan landscape-nya terus berubah rapidly. Tapi yang aku notice adalah foundation yang solid di fundamentals bikin adaptation ke new technologies jadi much smoother. Pengalaman sekarang udah cover diverse areas - algorithm design, data analysis, web development, dan system optimization. Yang penting adalah aku develop strong problem-solving methodology yang transferable across domains. Plus, habit untuk continuous learning dan engagement dengan tech community ensure aku stay updated dengan industry trends dan emerging technologies.",
-                
-                "Honestly, aku acknowledge bahwa experience aku belum se-extensive senior developers dengan decades of industry background. Tapi what I lack in years, aku compensate dengan intensity dan breadth of learning. Every single project aku treat sebagai comprehensive learning opportunity - from initial research phase sampai post-implementation analysis. Academic setting di ITB juga provide unique advantages seperti access ke latest research, structured approach to problem-solving, dan opportunity untuk experiment dengan novel approaches without commercial pressure constraints."
-            ]
+    elif category.endswith("_followup"):
+        base_category = category.replace("_followup", "")
+        
+        if context and context.is_context_relevant(category):
+            if question_intent == "challenging":
+                content_responses = [
+                    "'Cukup' itu memang relatif, tapi aku confident dengan depth dari pengalaman yang udah dijalani. Dalam 2-3 tahun terakhir, aku nggak cuma belajar surface level tapi bener-bener deep dive ke setiap technology stack dan methodology. Contohnya di Rush Hour Solver, aku spend significant time untuk optimize algorithm performance dari naive approach sampai sophisticated heuristic design. Setiap project ngajarin unique challenges - dari memory management di large state spaces sampai UI/UX considerations untuk complex visualizations. Plus, academic environment di ITB constantly expose aku ke cutting-edge research dan best practices yang immediately applicable ke practical problems.",
+                    
+                    "Fair point untuk questioning that. Learning curve di tech industry memang steep dan landscape-nya terus berubah rapidly. Tapi yang aku notice adalah foundation yang solid di fundamentals bikin adaptation ke new technologies jadi much smoother. Pengalaman sekarang udah cover diverse areas - algorithm design, data analysis, web development, dan system optimization. Yang penting adalah aku develop strong problem-solving methodology yang transferable across domains. Plus, habit untuk continuous learning dan engagement dengan tech community ensure aku stay updated dengan industry trends dan emerging technologies.",
+                    
+                    "Honestly, aku acknowledge bahwa experience aku belum se-extensive senior developers dengan decades of industry background. Tapi what I lack in years, aku compensate dengan intensity dan breadth of learning. Every single project aku treat sebagai comprehensive learning opportunity - from initial research phase sampai post-implementation analysis. Academic setting di ITB juga provide unique advantages seperti access ke latest research, structured approach to problem-solving, dan opportunity untuk experiment dengan novel approaches without commercial pressure constraints."
+                ]
+            else:
+                # followup yang tidak challenging - berdasarkan specific type
+                if base_category == "lagu_favorit":
+                    if specific_type == "first_time_hearing":
+                        content_responses = [
+                            "Pertama kali dengar Glenn Fredly waktu SMA, pas lagi ada acara keluarga dan aku putar 'Sekali Ini Saja'. Voice dia yang khas dan lirik yang deep banget langsung bikin aku terpukau. Dari situ mulai explore album-albumnya yang lain. Gaya musiknya yang soulful tapi tetap Indonesian banget bikin aku appreciate local music lebih dalam.",
+                            
+                            "Awal kenal Glenn Fredly pas lagi nyari musik untuk playlist study. Temen recommend 'Akhir Cerita Cinta' dan ternyata cocok banget buat background music coding. Setelah itu jadi curious sama karya-karya lainnya. Yang bikin special adalah combine antara jazz, soul, dan nuansa Indonesia yang unique."
+                        ]
+                    elif specific_type == "why_like":
+                        content_responses = [
+                            "Glenn Fredly special karena voice quality dan songwriting ability yang luar biasa. Lagu-lagunya punya depth yang nggak cuma catchy, tapi meaningful. Plus dia pioneer dalam Indonesian jazz-soul musik, yang inspiring banget buat industry musik kita.",
+                            
+                            "Yang bikin aku suka Glenn Fredly adalah versatility dalam musicality. Dari ballad romantis sampai jazz-funk, semua dia handle dengan sempurna. Lirik-liriknya juga puitis, nggak asal rhyme tapi benar-benar bercerita."
+                        ]
+                    elif specific_type == "recommendation":
+                        content_responses = [
+                            "Kalau suka Glenn Fredly, coba dengar Andien atau Indra Lesmana. Music style mereka punya similarity dalam jazz-soul Indonesian. RAN juga bagus, especially untuk modern Indonesian pop yang high quality.",
+                            
+                            "Untuk vibe yang mirip Glenn Fredly, recommend banget Tompi, Sade Merah Putih, atau even some songs dari Raisa yang lebih jazz-oriented. Atau kalau mau explore international, coba John Mayer atau D'Angelo."
+                        ]
+                    else:
+                        content_responses = [
+                            "Glenn Fredly memang legend di Indonesian music scene. Karya-karyanya timeless dan terus relevan sampai sekarang.",
+                            "Musik Glenn Fredly punya emotional connection yang strong. Setiap dengerin selalu ada moment yang relate."
+                        ]
+                elif base_category == "keahlian":
+                    content_responses = [
+                        "Pengalaman aku di data science specifically focus pada end-to-end implementation yang solve real problems. Mulai dari data acquisition dan preprocessing, exploratory analysis untuk understand patterns, feature engineering untuk optimize model performance, sampai deployment considerations untuk production environment. Portfolio projects demonstrate kemampuan handle different types of challenges - optimization problems di puzzle solvers, predictive modeling di finance tracker, dan algorithm visualization untuk educational purposes.",
+                        
+                        "Skill development journey aku quite structured dan progressive. Dimulai dari solid foundation di programming fundamentals, then expanding ke specialized areas seperti machine learning, algorithm optimization, dan web development. Each phase build upon previous knowledge - web dev experience help dengan deployment considerations, algorithm background crucial untuk model optimization, dan data analysis skills essential untuk business insight generation. Current focus adalah integrating AI capabilities dengan practical applications, seperti yang demonstrated di portfolio ini."
+                    ]
+                elif base_category == "proyek":
+                    content_responses = [
+                        "Detail implementasi Rush Hour Solver specifically involve custom heuristic design yang account untuk both distance to goal dan board configuration complexity. Algorithm comparison menunjukkan A* dengan Manhattan distance heuristic provide optimal balance antara solution quality dan computation time. Plus, visualization component menggunakan JavaFX yang allow real-time algorithm execution tracking with smooth animation transitions.",
+                        
+                        "Little Alchemy project technically challenging karena require bidirectional search implementation dalam dynamic recipe graph. Optimization include memoization untuk prevent redundant path calculations dan pruning strategies untuk reduce search space. Performance analysis menunjukkan bidirectional approach reduce average search time by 60% compared dengan standard BFS approach, especially untuk complex recipe dependencies."
+                    ]
+                else:
+                    # default followup responses
+                    content_responses = [
+                        f"Ya, soal {base_category} tadi, aku memang passionate tentang hal tersebut. Ada specific aspect yang ingin kamu tahu lebih detail?",
+                        f"Terkait {base_category}, pengalaman aku cukup beragam. Apa yang mau digali lebih dalam?",
+                        f"Oh iya, {base_category}. Ada curiosity khusus tentang hal itu?"
+                    ]
         else:
+            # jika konteks tidak relevan, treat as new question
+            category = base_category
             content_responses = [
-                # Response detail untuk follow-up tentang keahlian
-                "Pengalaman aku di data science specifically focus pada end-to-end implementation yang solve real problems. Mulai dari data acquisition dan preprocessing, exploratory analysis untuk understand patterns, feature engineering untuk optimize model performance, sampai deployment considerations untuk production environment. Portfolio projects demonstrate kemampuan handle different types of challenges - optimization problems di puzzle solvers, predictive modeling di finance tracker, dan algorithm visualization untuk educational purposes.",
-                
-                "Skill development journey aku quite structured dan progressive. Dimulai dari solid foundation di programming fundamentals, then expanding ke specialized areas seperti machine learning, algorithm optimization, dan web development. Each phase build upon previous knowledge - web dev experience help dengan deployment considerations, algorithm background crucial untuk model optimization, dan data analysis skills essential untuk business insight generation. Current focus adalah integrating AI capabilities dengan practical applications, seperti yang demonstrated di portfolio ini."
+                f"Hmm, sepertinya topik berpindah ke {base_category} ya. Aku senang bahas hal ini.",
+                f"Oh, sekarang tentang {base_category}. Topik yang menarik nih.",
+                f"Baik, kita bahas {base_category} sekarang."
             ]
     
     elif category == "keahlian":
         content_responses = [
-            # Response detail untuk keahlian profesional
             "Skill utama aku ada di intersection antara data science dan web development, dengan strong foundation di Python dan JavaScript ecosystems. Untuk data science, aku proficient dengan pandas untuk data manipulation, scikit-learn untuk machine learning models, matplotlib dan seaborn untuk visualization, dan numpy untuk numerical computing. Web development side, aku experienced dengan Next.js dan React untuk frontend, plus kemampuan integrate dengan backend services. Yang crucial adalah understanding tentang when to use which tool - efficiency dan hasil akhir selalu jadi primary consideration dalam technology selection.",
             
-            # Variasi 2: Intersection focus dengan detail
             "Specialization aku adalah combining data science capabilities dengan modern web development, yang relatively unique combination. Python jadi daily driver untuk all data-related tasks - from preprocessing messy datasets sampai building predictive models. Next.js dan React ecosystem aku gunakan untuk create interactive applications yang showcase data insights effectively. Portfolio ini perfect example dari integration tersebut - AI backend dengan FastAPI, modern frontend dengan TypeScript, dan seamless user experience. Plus, aku comfortable dengan deployment strategies untuk both data science models dan web applications.",
             
-            # Variasi 3: Practical experience dengan detail
             "Yang bikin aku confident adalah extensive hands-on experience dengan tools yang aku claim sebagai expertise. Pandas bukan cuma untuk basic data manipulation, tapi advanced operations seperti multi-index handling, time series analysis, dan performance optimization untuk large datasets. Scikit-learn usage cover dari classical algorithms sampai ensemble methods, dengan understanding tentang hyperparameter tuning dan cross-validation strategies. React development includes state management dengan complex component architectures, performance optimization dengan memoization, dan integration dengan various APIs dan databases.",
             
-            # Variasi 4: Learning approach dengan detail
             "Approach aku dalam skill development adalah depth over breadth, dengan focus ke technologies yang proven valuable dan versatile. Python ecosystem dipilih karena extensive libraries untuk data science, machine learning, dan general programming. JavaScript dengan React/Next.js chosen karena powerful untuk building modern, interactive applications. But aku always open untuk explore new technologies kalau memang solve specific problems better. Recent exploration includes FastAPI untuk efficient backend development dan integration dengan AI services, yang directly applicable untuk building scalable data-driven applications."
         ]
         
     elif category == "proyek":
         content_responses = [
-            # Response detail untuk proyek profesional
             "Rush Hour Puzzle Solver definitely yang paling technically challenging dan educational. Project ini require implementation dari multiple pathfinding algorithms - UCS untuk optimal solutions, Greedy Best-First untuk speed, A* untuk balanced approach, dan Dijkstra untuk comprehensive exploration. Biggest challenge adalah optimizing algorithm performance untuk handle complex puzzle configurations without compromising solution quality. Aku juga developed custom heuristic functions dan implement efficient state representation untuk minimize memory usage. Plus, created interactive visualization yang allow users untuk understand algorithm behavior step-by-step, yang require careful balance antara technical accuracy dan user experience.",
             
-            # Variasi 2: Little Alchemy focus dengan detail
             "Little Alchemy Solver project yang paling intellectually stimulating karena involve complex graph theory applications. Implementation cover BFS untuk breadth exploration, DFS untuk depth analysis, dan Bidirectional Search untuk optimal pathfinding dalam recipe combination space. Challenge utama adalah handling directed graph dengan dynamic recipe dependencies dan optimizing search strategies untuk minimize computation time. Aku develop sophisticated pruning techniques dan implement memoization untuk avoid redundant computations. Result adalah algorithm yang consistently find optimal recipe paths bahkan untuk complex item combinations yang require dozens of intermediate steps.",
             
-            # Variasi 3: Learning impact dengan detail  
             "Setiap algorithmic project memberikan unique insights dan expand understanding tentang computational complexity dan optimization strategies. Rush Hour taught me about state space exploration dan heuristic design, Little Alchemy about graph traversal optimization dan dynamic programming applications, IQ Puzzler Pro about constraint satisfaction dan backtracking efficiency. Collectively, these projects demonstrate ability untuk adapt different algorithmic paradigms to specific problem domains dan develop custom solutions yang account untuk real-world constraints seperti memory limitations dan user experience requirements.",
             
-            # Variasi 4: Technical depth dengan detail
             "Yang bikin proud dari project-project algorithmic ini adalah level of technical sophistication dan attention to both performance dan usability. Bukan cuma implement standard algorithms, tapi juga develop custom optimizations, design efficient data structures, dan create comprehensive testing frameworks untuk validate correctness dan performance. Documentation dan code organization also prioritized untuk ensure maintainability dan knowledge transfer. Each project include detailed analysis tentang time complexity, space complexity, dan comparison dengan alternative approaches untuk demonstrate thorough understanding tentang algorithm design principles."
         ]
         
-    # KATEGORI SANTAI - Response singkat dan casual
+    # KATEGORI SANTAI - Response yang context-aware berdasarkan specific type
     elif category == "makanan_favorit":
-        content_responses = [
-            "Street food Indonesia jadi obsesi. Martabak, sate, ketoprak, semua enak. Jakarta punya spot-spot hidden gems yang seru.",
-            "Penggemar berat kuliner jalanan. Gorengan sampai batagor, semuanya punya cerita unik. Sering food hunting sambil ngerjain tugas.",
-            "Hobi jelajah street food udah lifestyle. Tiap daerah punya specialty beda. Jakarta, spot favorit around Sabang sama Senayan.",
-            "Street food comfort food banget. Pas stress deadline atau stuck coding, keliling cari makan enak jadi refreshing."
-        ]
+        if specific_type == "why_like":
+            content_responses = [
+                "Street food Indonesian itu authentic banget dan punya variety yang luas. Martabak manis misalnya, kombinasi rasa manis, tekstur yang fluffy, dan harga yang affordable bikin perfect comfort food. Plus, setiap daerah punya style masing-masing.",
+                "Yang bikin aku obsessed sama street food adalah culture dan experience-nya. Bukan cuma soal rasa, tapi social interaction dengan penjual, atmosphere di pinggir jalan, dan feeling nostalgic yang ga bisa didapat di restoran fancy."
+            ]
+        elif specific_type == "where_to_eat":
+            content_responses = [
+                "Jakarta punya banyak spot legendary. Sabang sama Pecenongan classic banget buat late night food hunting. Senayan area juga bagus, especially around Gelora Bung Karno. Tiap district punya hidden gems masing-masing.",
+                "Prefer spot yang local authentic ketimbang yang touristy. Biasanya hunting di residential areas atau dekat campus. Yang penting crowd-nya mostly local people, itu biasanya indicator kualitas yang good."
+            ]
+        elif specific_type == "frequency":
+            content_responses = [
+                "Almost every week sih, especially pas weekend atau abis capek ngerjain projects. Street food itu perfect stress reliever dan ga perlu planning ribet.",
+                "Tergantung mood dan budget. Kalau lagi experiment sama koding sampai larut, biasanya jadi excuse buat keluar cari makan enak di sekitar kampus."
+            ]
+        else:
+            content_responses = [
+                "Street food Indonesia jadi obsesi. Martabak, sate, ketoprak, semua enak. Jakarta punya spot-spot hidden gems yang seru.",
+                "Penggemar berat kuliner jalanan. Gorengan sampai batagor, semuanya punya cerita unik. Sering food hunting sambil ngerjain tugas.",
+                "Hobi jelajah street food udah lifestyle. Tiap daerah punya specialty beda. Jakarta, spot favorit around Sabang sama Senayan.",
+                "Street food comfort food banget. Pas stress deadline atau stuck coding, keliling cari makan enak jadi refreshing."
+            ]
         
     elif category == "lagu_favorit":
-        content_responses = [
-            "Seleranya musik nostalgic & oldies gitu sih. Lagi relate banget sama 'Without You' Air Supply, tapi 'Sekali Ini Saja' Glenn Fredly gak kalah sih. Kalau coding biasanya pakai lo-fi beats atau soundtrack film kayak Star Wars yang bikin suasana lebih intens dan bikin gak ngantuk.",
-            "Suka semua lagu, semua generasi. Tapi oldies selalu juaranya, lirik dalem, gak pernah bosenin. Ada emotional connection yang bikin rileks pas overwhelmed.",
-            "Mix Indonesia dan barat klasik sih. Glenn Fredly, Noah, Air Supply, Celine Dion, Queen",
-            "Musik favorit itu subjective. Tapi kalau ditanya, oldies jadi pilihan prioritas. Bikin relax dan nostalgia. Lo-fi beats juga enak buat coding.",
-            "Waduh, banyak banget. Dari oldies kayak Air Supply, Glenn Fredly, Glimpse of Us. Setiap mood ada lagunya.",
-            "Apapun lagunya yang kamu denger mungkin aku dengerin, apa mau mutual spotify nih?"
-        ]
+        if specific_type == "first_time_hearing":
+            content_responses = [
+                "Pertama kali kenal musik oldies pas SMA, kakak aku sering putar Air Supply dan Celine Dion. 'Without You' jadi gateway song yang bikin aku appreciate ballad klasik. Voice quality dan emotional depth yang beda banget sama musik mainstream saat itu.",
+                "Exposure pertama ke Glenn Fredly waktu ada acara keluarga dan sepupu yang musician recommend. Setelah dengar 'Sekali Ini Saja', langsung jatuh cinta sama style jazz-soul Indonesian. Dari situ mulai explore karya-karya local artist lainnya."
+            ]
+        elif specific_type == "why_like":
+            content_responses = [
+                "Oldies punya emotional depth dan musical complexity yang susah dicari di modern music. Lirik-liriknya meaningful, production quality tinggi, dan timeless. Plus, ada nostalgia factor yang bikin relatable di berbagai situasi.",
+                "Glenn Fredly special karena pioneer Indonesian jazz-soul. Voice quality luar biasa dan songwriting yang matang. Musik dia sophisticated tapi tetap accessible, perfect balance."
+            ]
+        elif specific_type == "favorite_lyrics":
+            content_responses = [
+                "Lirik 'Without You' yang 'I can't live if living is without you' itu classic banget. Simple tapi powerful, dan delivery Air Supply bikin emotional impact-nya kuat.",
+                "'Sekali ini saja ku mengalah' from Glenn Fredly itu profound. Ada acceptance dan wisdom dalam simplicity lirik tersebut. Plus melody yang complement perfectly."
+            ]
+        elif specific_type == "recommendation":
+            content_responses = [
+                "Kalau suka oldies barat, coba dengar Bee Gees, Chicago, atau Bread. Untuk Indonesian classics, Chrisye dan Iwan Fals legendary. Modern artists yang punya similar vibe: John Mayer atau Adele.",
+                "Mutual Spotify actually good idea! Aku curious sama music taste kamu juga. Kalau suka Glenn Fredly, mungkin akan appreciate Tompi atau Andien juga."
+            ]
+        else:
+            content_responses = [
+                "Seleranya musik nostalgic & oldies gitu sih. Lagi relate banget sama 'Without You' Air Supply, tapi 'Sekali Ini Saja' Glenn Fredly gak kalah sih. Kalau coding biasanya pakai lo-fi beats atau soundtrack film kayak Star Wars yang bikin suasana lebih intens dan bikin gak ngantuk.",
+                "Suka semua lagu, semua generasi. Tapi oldies selalu juaranya, lirik dalem, gak pernah bosenin. Ada emotional connection yang bikin rileks pas overwhelmed.",
+                "Mix Indonesia dan barat klasik sih. Glenn Fredly, Noah, Air Supply, Celine Dion, Queen",
+                "Musik favorit itu subjective. Tapi kalau ditanya, oldies jadi pilihan prioritas. Bikin relax dan nostalgia. Lo-fi beats juga enak buat coding.",
+                "Waduh, banyak banget. Dari oldies kayak Air Supply, Glenn Fredly, Glimpse of Us. Setiap mood ada lagunya."
+            ]
         
     elif category == "hobi":
-        content_responses = [
-            "Reading, traveling, food hunting. Novel fantasy kayak Omniscient Reader Viewpoint favorit. Street food exploration nggak bosen.",
-            "Balance intellectual dan sensory. Baca novel buat perspective baru, traveling buat cultural exposure. Both influence problem-solving.",
-            "Aktivitas yang kasih learning experience. Reading expand imagination, traveling broaden worldview, food hunting appreciate culture.",
-            "Hobi somehow connected ke cara kerja. Reading fantasy relate ke system design. Traveling ngajarin adaptability."
-        ]
+        if specific_type == "when_started":
+            content_responses = [
+                "Reading habit mulai SMA, pas discover fantasy novels. 'Omniscient Reader Viewpoint' jadi turning point yang bikin aku appreciate storytelling complexity. Traveling baru intensif pas kuliah, chance explore Java dan sekitarnya.",
+                "Food hunting udah dari kecil sebenernya, tapi jadi serious hobby pas kuliah. Independence dan exploration nature jadi combine perfectly."
+            ]
+        elif specific_type == "frequency":
+            content_responses = [
+                "Reading almost daily, especially pas before sleep atau commute time. Traveling biasanya weekend atau long break. Food hunting spontaneous, tergantung mood dan discover new places.",
+                "Balance between intellectual dan physical activities. Kira-kira 60% reading, 30% food exploration, 10% traveling jauh."
+            ]
+        elif specific_type == "what_interesting":
+            content_responses = [
+                "Reading bikin aku exposed ke different perspectives dan world-building yang creative. Fantasy genre especially ngajarin aku appreciate complexity dalam system design. Traveling dan food hunting ngasih real-world cultural experience.",
+                "Yang menarik adalah how each hobby complement aku punya problem-solving approach. Reading ngasah analytical thinking, traveling ngajarin adaptability, food hunting develop appreciation untuk craftsmanship."
+            ]
+        else:
+            content_responses = [
+                "Reading, traveling, food hunting. Novel fantasy kayak Omniscient Reader Viewpoint favorit. Street food exploration nggak bosen.",
+                "Balance intellectual dan sensory. Baca novel buat perspective baru, traveling buat cultural exposure. Both influence problem-solving.",
+                "Aktivitas yang kasih learning experience. Reading expand imagination, traveling broaden worldview, food hunting appreciate culture.",
+                "Hobi somehow connected ke cara kerja. Reading fantasy relate ke system design. Traveling ngajarin adaptability."
+            ]
     
     # untuk pertanyaan personal, redirect dengan halus  
     elif category.startswith("personal_"):
@@ -849,18 +1002,22 @@ def create_context_aware_prompt(question: str, context: ConversationContext = No
     - Karakter: {user_profile['karakter']}
     """
     
-    # tambah informasi tentang percakapan sebelumnya jika tersedia
-    if context and (context.questions_history or context.mentioned_items):
+    # PERBAIKI: hanya tambah konteks jika benar-benar relevan
+    if context and context.should_use_context_in_prompt(category):
         previous_question = context.questions_history[-1] if context.questions_history else "Belum ada"
         
         base_prompt += f"""
-        Konteks percakapan:
-        - Kategori terakhir dibahas: {context.last_category if context.last_category else "Belum ada"}
-        - Item yang disebutkan sebelumnya: {', '.join(context.mentioned_items) if context.mentioned_items else "Belum ada"}
+        Konteks percakapan yang RELEVAN:
+        - Kategori terakhir dibahas: {context.last_category}
+        - Item yang disebutkan sebelumnya: {', '.join(list(context.mentioned_items)[:3]) if context.mentioned_items else "Belum ada"}
         - Pertanyaan sebelumnya: {previous_question}
         - Tone conversation: {context.conversation_tone}
         
-        PENTING: Jika pertanyaan saat ini sepertinya mereferensikan atau follow-up dari percakapan sebelumnya, WAJIB acknowledge connection tersebut dan respond dalam konteks yang relevan.
+        PENTING: Kamu boleh mereferensikan konteks ini HANYA JIKA pertanyaan saat ini jelas terkait atau berupa follow-up dari percakapan sebelumnya.
+        """
+    else:
+        base_prompt += f"""
+        CATATAN: Ini adalah pertanyaan baru yang tidak terkait dengan percakapan sebelumnya. Jawab sebagai topik baru.
         """
     
     # penanganan untuk input gibberish
@@ -936,7 +1093,7 @@ def create_context_aware_prompt(question: str, context: ConversationContext = No
         
         Context from previous conversation:
         - Last category: {context.last_category if context else 'None'}
-        - Previous items discussed: {', '.join(context.mentioned_items) if context and context.mentioned_items else 'None'}
+        - Previous items discussed: {', '.join(list(context.mentioned_items)[:3]) if context and context.mentioned_items else 'None'}
         """
         
     elif category == "keahlian":
