@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# smart import dengan fallback mechanism
+# smart import dengan fallback mechanism - keep original logic
 RAG_SYSTEM_TYPE = "None"
 RAGSystem = None
 initialize_rag_system = None
@@ -35,7 +35,7 @@ except ImportError as e:
     logger.warning(f"❌ ChromaDB not available: {e}")
     try:
         # fallback ke simple rag system
-        from simple_rag_system import SimpleRAGSystem as RAGSystem, initialize_rag_system, load_knowledge_from_file
+        from rag_system import SimpleRAGSystem as RAGSystem, initialize_rag_system, load_knowledge_from_file
         RAG_SYSTEM_TYPE = "Simple"
         logger.info("✅ Simple RAG system loaded as fallback")
     except ImportError as e2:
@@ -44,6 +44,7 @@ except ImportError as e:
 
 app = FastAPI(title=f"AI Portfolio Backend - {RAG_SYSTEM_TYPE} RAG")
 
+# keep original CORS logic
 frontend_url = os.getenv("FRONTEND_URL", "https://frontend-portofolio-danen.vercel.app")
 
 allowed_origins = []
@@ -81,6 +82,7 @@ class AIResponse(BaseModel):
     session_id: str
     related_topics: Optional[List[str]] = []
 
+# keep full original ConversationContext - all sophisticated features intact
 class ConversationContext:
     def __init__(self):
         self.last_category: Optional[str] = None
@@ -240,7 +242,7 @@ class ConversationContext:
             
         return self.potential_followups[self.last_category][:limit]
 
-# global variables
+# global variables - keep original structure
 conversation_sessions = {}
 rag_system = None
 knowledge_base_data = []
@@ -260,7 +262,7 @@ def cleanup_old_sessions():
         logger.info(f"cleaned up {len(sessions_to_remove)} inactive sessions")
 
 def load_portfolio_knowledge() -> List[Dict]:
-    """load knowledge base dari file portfolio.json"""
+    """load knowledge base dari file portfolio.json - keep original logic"""
     try:
         if os.path.exists("portfolio.json"):
             with open("portfolio.json", "r", encoding="utf-8") as f:
@@ -281,6 +283,7 @@ def load_portfolio_knowledge() -> List[Dict]:
         logger.error(f"error loading portfolio.json: {e}")
         return []
 
+# keep all original sophisticated functions
 def is_gibberish(text: str) -> bool:
     if len(text) < 2:
         return False
@@ -327,7 +330,7 @@ def is_gibberish(text: str) -> bool:
     return False
 
 def categorize_question_with_rag(question: str, context: ConversationContext = None) -> Tuple[str, str]:
-    """kategorisasi pertanyaan dengan bantuan rag untuk context tambahan"""
+    """kategorisasi pertanyaan dengan bantuan rag untuk context tambahan - keep original logic"""
     global rag_system
     
     basic_category = categorize_question_basic(question)
@@ -361,13 +364,13 @@ def categorize_question_with_rag(question: str, context: ConversationContext = N
     return basic_category, rag_context
 
 def categorize_question_basic(question: str) -> str:
-    """basic question categorization dengan personal content filtering"""
+    """basic question categorization dengan personal content filtering - keep original sophisticated logic"""
     question_lower = question.lower()
     
     if is_gibberish(question):
         return "gibberish"
     
-    # personal content detection (highest priority)
+    # personal content detection (highest priority) - keep original comprehensive list
     personal_sensitive = {
         "personal_relationship": ["pacar", "jodoh", "pacaran", "pasangan", "gebetan", "cinta", "nikah", "menikah", "single", "lajang", "relationship", "dating", "girlfriend", "boyfriend"],
         "personal_financial": ["gaji", "salary", "penghasilan", "bayaran", "uang", "kekayaan", "harta", "tabungan", "pendapatan", "income", "money", "rich", "poor"],
@@ -384,7 +387,7 @@ def categorize_question_basic(question: str) -> str:
         if any(keyword in question_lower for keyword in keywords):
             return category
     
-    # regular categorization
+    # regular categorization - keep original comprehensive categories
     category_keywords = {
         "keahlian": ["python", "data science", "machine learning", "pandas", "react", "next.js", "keahlian", "skill"],
         "proyek": ["proyek", "project", "rush hour", "little alchemy", "iq puzzler", "portfolio"],
@@ -411,7 +414,7 @@ def categorize_question_basic(question: str) -> str:
         return "general"
 
 def create_rag_enhanced_prompt(question: str, rag_context: str, context: ConversationContext = None) -> str:
-    """buat prompt yang enhanced dengan rag context"""
+    """buat prompt yang enhanced dengan rag context - keep original sophisticated prompt engineering"""
     
     base_prompt = f"""
 Kamu adalah asisten pribadi Danendra Shafi Athallah yang cerdas, informatif, dan memiliki kepribadian yang santai. 
@@ -460,7 +463,7 @@ Contoh yang SALAH: "That's definitely something worth discussing..."
     return base_prompt
 
 def generate_fallback_response(question: str, category: str) -> str:
-    """generate fallback response dengan personal content protection"""
+    """generate fallback response dengan personal content protection - keep original sophisticated responses"""
     
     # handle sensitive personal content dengan redirect yang smooth
     personal_redirects = {
@@ -511,7 +514,7 @@ def generate_fallback_response(question: str, category: str) -> str:
         import random
         return random.choice(personal_redirects[category])
     
-    # regular fallback responses untuk non-sensitive content
+    # regular fallback responses untuk non-sensitive content - keep original comprehensive responses
     regular_responses = {
         "keahlian": "Aku punya keahlian di Python untuk data science, Next.js untuk web development, dan algoritma untuk problem solving. Mau tahu lebih detail tentang yang mana?",
         "proyek": "Proyek unggulan aku adalah Rush Hour Solver dengan algoritma pathfinding dan Little Alchemy Solver dengan graph search. Ada yang menarik?", 
@@ -574,7 +577,7 @@ def call_openai_api(prompt):
 
 @app.on_event("startup")
 async def startup_event():
-    """initialize rag system saat startup dengan fallback"""
+    """initialize rag system saat startup dengan fallback - keep original logic"""
     global rag_system, knowledge_base_data
     try:
         logger.info(f"🚀 Starting AI Portfolio Backend with {RAG_SYSTEM_TYPE} RAG")
@@ -598,6 +601,7 @@ async def startup_event():
         logger.error(f"❌ Error in startup: {e}")
         rag_system = None
 
+# keep ALL original endpoints with full functionality
 @app.post("/ask", response_model=AIResponse)
 async def ask_ai(request: QuestionRequest):
     try:
@@ -819,4 +823,5 @@ async def get_knowledge_stats():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)

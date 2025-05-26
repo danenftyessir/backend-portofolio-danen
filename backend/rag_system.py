@@ -1,240 +1,357 @@
 import json
-import os
+import re
 import logging
-from typing import List, Dict, Any
-import chromadb
-from chromadb.config import Settings
-import openai
-from sentence_transformers import SentenceTransformer
-import requests
+from typing import List, Dict, Any, Optional
+from collections import defaultdict
+import difflib
 
 logger = logging.getLogger(__name__)
 
-class RAGSystem:
-    def __init__(self, openai_api_key: str = None, use_local_embeddings: bool = True):
-        """
-        inisialisasi rag system dengan chromadb dan embedding model
-        
-        args:
-            openai_api_key: api key untuk openai embeddings (optional jika pakai local)
-            use_local_embeddings: gunakan sentence-transformers lokal atau openai api
-        """
-        self.openai_api_key = openai_api_key
-        self.use_local_embeddings = use_local_embeddings
-        
-        # setup chromadb with new configuration
-        try:
-            self.chroma_client = chromadb.PersistentClient(path="./chroma_db")
-            logger.info("chromadb client initialized successfully")
-        except Exception as e:
-            logger.error(f"failed to initialize chromadb: {e}")
-            raise
-        
-        # setup embedding model
-        if use_local_embeddings:
-            try:
-                # pakai model yang ringan dan bagus untuk bahasa indonesia
-                self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-                logger.info("local embedding model loaded successfully")
-            except Exception as e:
-                logger.error(f"failed to load local embedding model: {e}")
-                raise
-        else:
-            if not openai_api_key:
-                raise ValueError("openai api key required for openai embeddings")
-            openai.api_key = openai_api_key
-        
-        # nama collection untuk portfolio
-        self.collection_name = "portfolio_knowledge"
-        self.collection = None
-        
-    def get_embedding(self, text: str) -> List[float]:
-        """generate embedding untuk text"""
-        try:
-            if self.use_local_embeddings:
-                # pakai sentence-transformers
-                embedding = self.embedding_model.encode(text).tolist()
-            else:
-                # pakai openai api
-                response = openai.Embedding.create(
-                    input=text,
-                    model="text-embedding-ada-002"
-                )
-                embedding = response['data'][0]['embedding']
-            
-            return embedding
-        except Exception as e:
-            logger.error(f"failed to generate embedding: {e}")
-            raise
+class SimpleRAGSystem:
+    """enhanced simple rag system with full functionality matching chromadb version"""
     
+    def __init__(self):
+        self.documents: List[Dict] = []
+        self.keyword_index: Dict[str, List[int]] = defaultdict(list)
+        self.category_index: Dict[str, List[int]] = defaultdict(list)
+        self.title_index: Dict[str, int] = {}
+        self.content_vectors: List[Dict[str, float]] = []  # tf-idf style vectors
+        
     def load_knowledge_base(self, knowledge_data: List[Dict]) -> bool:
-        """load knowledge base ke chromadb"""
+        """load dan index knowledge base dengan advanced indexing"""
         try:
-            # hapus collection lama jika ada
-            try:
-                self.chroma_client.delete_collection(self.collection_name)
-                logger.info("deleted existing collection")
-            except:
-                pass
-            
-            # buat collection baru
-            self.collection = self.chroma_client.create_collection(
-                name=self.collection_name,
-                metadata={"description": "portfolio knowledge base"}
-            )
-            
-            # process dan simpan setiap dokumen
-            documents = []
-            embeddings = []
-            ids = []
-            metadatas = []
-            
-            for item in knowledge_data:
-                # gabungkan title dan content untuk context yang lebih lengkap
-                full_text = f"{item['title']}: {item['content']}"
-                
-                embedding = self.get_embedding(full_text)
-                
-                documents.append(full_text)
-                embeddings.append(embedding)
-                ids.append(item['id'])
-                metadatas.append({
-                    'title': item['title'],
-                    'category': item['category']
-                })
-            
-            # batch insert ke chromadb
-            self.collection.add(
-                documents=documents,
-                embeddings=embeddings,
-                ids=ids,
-                metadatas=metadatas
-            )
-            
-            logger.info(f"loaded {len(knowledge_data)} documents to knowledge base")
+            self.documents = knowledge_data
+            self._build_advanced_indexes()
+            logger.info(f"✅ enhanced simple rag loaded {len(knowledge_data)} documents")
             return True
-            
         except Exception as e:
-            logger.error(f"failed to load knowledge base: {e}")
+            logger.error(f"❌ error loading knowledge base: {e}")
             return False
     
-    def retrieve_relevant_docs(self, query: str, top_k: int = 3, category_filter: str = None) -> List[Dict]:
-        """retrieve dokumen yang relevan berdasarkan query"""
-        try:
-            if not self.collection:
-                # coba load collection yang ada
-                try:
-                    self.collection = self.chroma_client.get_collection(self.collection_name)
-                except:
-                    logger.error("no knowledge base found. please load knowledge base first.")
-                    return []
+    def _build_advanced_indexes(self):
+        """build comprehensive indexes untuk efficient retrieval"""
+        # document frequency untuk tf-idf calculation
+        doc_freq = defaultdict(int)
+        all_words = set()
+        
+        # first pass: collect all words dan document frequencies
+        for i, doc in enumerate(self.documents):
+            category = doc.get('category', 'general')
+            self.category_index[category].append(i)
             
-            # generate embedding untuk query
-            query_embedding = self.get_embedding(query)
+            # index by title untuk exact matching
+            title = doc.get('title', '').lower()
+            if title:
+                self.title_index[title] = i
             
-            # setup filter berdasarkan kategori jika ada
-            where_filter = None
-            if category_filter:
-                where_filter = {"category": category_filter}
+            # extract words dari content, title, dan keywords
+            content = doc.get('content', '').lower()
+            keywords = doc.get('keywords', [])
             
-            # query chromadb
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k,
-                where=where_filter
-            )
+            # comprehensive word extraction
+            text_content = f"{content} {title} {' '.join(keywords)}"
+            words = re.findall(r'\b\w+\b', text_content.lower())
             
-            # format hasil
-            retrieved_docs = []
-            if results['documents'] and len(results['documents'][0]) > 0:
-                docs = results['documents'][0]
-                metadatas = results['metadatas'][0]
-                distances = results['distances'][0]
+            # filter words dan build vocabulary
+            meaningful_words = [w for w in words if len(w) > 2 and not w.isdigit()]
+            doc_words = set(meaningful_words)
+            
+            # update document frequency
+            for word in doc_words:
+                doc_freq[word] += 1
+                all_words.add(word)
+            
+            # build word index untuk fast lookup
+            for word in meaningful_words:
+                if word not in self.keyword_index[word]:
+                    self.keyword_index[word].append(i)
+        
+        # second pass: build tf-idf style vectors
+        total_docs = len(self.documents)
+        for i, doc in enumerate(self.documents):
+            content = doc.get('content', '').lower()
+            title = doc.get('title', '').lower()
+            keywords = doc.get('keywords', [])
+            
+            text_content = f"{content} {title} {' '.join(keywords)}"
+            words = re.findall(r'\b\w+\b', text_content.lower())
+            meaningful_words = [w for w in words if len(w) > 2 and not w.isdigit()]
+            
+            # calculate term frequencies
+            word_count = defaultdict(int)
+            for word in meaningful_words:
+                word_count[word] += 1
+            
+            # build tf-idf style vector
+            doc_vector = {}
+            for word, count in word_count.items():
+                tf = count / len(meaningful_words) if meaningful_words else 0
+                idf = total_docs / doc_freq[word] if doc_freq[word] > 0 else 0
                 
-                for i, doc in enumerate(docs):
-                    retrieved_docs.append({
-                        'content': doc,
-                        'metadata': metadatas[i],
-                        'similarity_score': 1 - distances[i]  # convert distance ke similarity
+                # weight boost untuk keywords dan title
+                weight_multiplier = 1.0
+                if word in [kw.lower() for kw in keywords]:
+                    weight_multiplier = 3.0  # keywords get higher weight
+                elif word in title:
+                    weight_multiplier = 2.0  # title words get medium weight
+                
+                doc_vector[word] = tf * idf * weight_multiplier
+            
+            self.content_vectors.append(doc_vector)
+    
+    def retrieve_relevant_docs(self, query: str, top_k: int = 3, category_filter: str = None) -> List[Dict]:
+        """advanced retrieval dengan multiple scoring methods"""
+        try:
+            query_words = re.findall(r'\b\w+\b', query.lower())
+            query_words = [w for w in query_words if len(w) > 2]
+            
+            if not query_words:
+                return []
+            
+            doc_scores = defaultdict(float)
+            
+            # method 1: exact keyword matching dengan boosting
+            for word in query_words:
+                if word in self.keyword_index:
+                    for doc_idx in self.keyword_index[word]:
+                        # filter by category kalau ada
+                        if category_filter:
+                            doc_category = self.documents[doc_idx].get('category', '')
+                            if doc_category != category_filter:
+                                continue
+                        
+                        # scoring berdasarkan context
+                        doc = self.documents[doc_idx]
+                        keywords = [kw.lower() for kw in doc.get('keywords', [])]
+                        title = doc.get('title', '').lower()
+                        content = doc.get('content', '').lower()
+                        
+                        # progressive scoring
+                        if word in keywords:
+                            doc_scores[doc_idx] += 5.0  # exact keyword match
+                        elif word in title:
+                            doc_scores[doc_idx] += 3.0  # title match
+                        elif word in content:
+                            doc_scores[doc_idx] += 1.0  # content match
+                
+                # method 2: fuzzy matching untuk typos dan variations
+                similar_words = difflib.get_close_matches(
+                    word, self.keyword_index.keys(), n=3, cutoff=0.8
+                )
+                for similar_word in similar_words:
+                    if similar_word != word:  # avoid double counting
+                        for doc_idx in self.keyword_index[similar_word]:
+                            if category_filter:
+                                doc_category = self.documents[doc_idx].get('category', '')
+                                if doc_category != category_filter:
+                                    continue
+                            doc_scores[doc_idx] += 0.5  # fuzzy match bonus
+            
+            # method 3: tf-idf style similarity untuk comprehensive matching
+            for doc_idx, doc_vector in enumerate(self.content_vectors):
+                if category_filter:
+                    doc_category = self.documents[doc_idx].get('category', '')
+                    if doc_category != category_filter:
+                        continue
+                
+                # calculate cosine similarity dengan query
+                query_vector_sum = 0
+                doc_vector_sum = 0
+                dot_product = 0
+                
+                for word in query_words:
+                    if word in doc_vector:
+                        word_weight = doc_vector[word]
+                        dot_product += word_weight
+                        doc_vector_sum += word_weight ** 2
+                        query_vector_sum += 1  # simple query term weight
+                
+                if doc_vector_sum > 0 and query_vector_sum > 0:
+                    similarity = dot_product / (doc_vector_sum ** 0.5 * query_vector_sum ** 0.5)
+                    doc_scores[doc_idx] += similarity * 2.0  # tf-idf bonus
+            
+            # method 4: category relevance bonus
+            if not category_filter:  # only kalau tidak ada explicit filter
+                for doc_idx in range(len(self.documents)):
+                    doc_category = self.documents[doc_idx].get('category', '')
+                    
+                    # boost score untuk categories yang sering dimention dalam query
+                    category_boost_map = {
+                        'keahlian': ['python', 'skill', 'kemampuan', 'expertise'],
+                        'proyek': ['project', 'proyek', 'aplikasi', 'sistem'],
+                        'musik': ['lagu', 'musik', 'song', 'artist'],
+                        'hobi': ['hobi', 'suka', 'gemar', 'hobby'],
+                        'pengalaman': ['pengalaman', 'experience', 'pernah']
+                    }
+                    
+                    for category, trigger_words in category_boost_map.items():
+                        if doc_category == category:
+                            for trigger in trigger_words:
+                                if trigger in query.lower():
+                                    doc_scores[doc_idx] += 1.0
+                                    break
+            
+            # sort by score dan return top_k dengan metadata
+            sorted_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
+            
+            results = []
+            for doc_idx, score in sorted_docs[:top_k]:
+                if score > 0.1:  # threshold untuk relevancy
+                    doc = self.documents[doc_idx]
+                    results.append({
+                        'content': f"{doc['title']}: {doc['content']}",
+                        'metadata': {
+                            'title': doc['title'],
+                            'category': doc['category'],
+                            'keywords': doc.get('keywords', [])
+                        },
+                        'similarity_score': min(score / 10.0, 1.0)  # normalize score
                     })
             
-            logger.info(f"retrieved {len(retrieved_docs)} relevant documents for query: {query[:50]}...")
-            return retrieved_docs
+            logger.info(f"retrieved {len(results)} docs for query: {query[:50]}...")
+            return results
             
         except Exception as e:
-            logger.error(f"failed to retrieve documents: {e}")
+            logger.error(f"❌ error retrieving docs: {e}")
             return []
     
     def build_rag_context(self, query: str, top_k: int = 3, category_filter: str = None) -> str:
-        """build context dari retrieved documents untuk prompt"""
-        retrieved_docs = self.retrieve_relevant_docs(query, top_k, category_filter)
+        """build comprehensive context dari retrieved docs"""
+        docs = self.retrieve_relevant_docs(query, top_k, category_filter)
         
-        if not retrieved_docs:
+        if not docs:
             return ""
         
-        # format context dengan informasi relevancy
         context_parts = []
-        for i, doc in enumerate(retrieved_docs):
-            similarity = doc['similarity_score']
-            content = doc['content']
-            category = doc['metadata'].get('category', 'general')
-            
-            # hanya pakai dokumen dengan similarity score yang cukup tinggi
-            if similarity > 0.7:  # threshold bisa di-adjust
-                context_parts.append(f"[{category}] {content}")
+        for doc in docs:
+            if doc['similarity_score'] > 0.2:  # relevancy threshold
+                content = doc['content']
+                category = doc['metadata']['category']
+                
+                # intelligent content trimming berdasarkan relevancy
+                if doc['similarity_score'] > 0.7:
+                    # high relevancy: use full content (up to 300 chars)
+                    trimmed_content = content[:300] + "..." if len(content) > 300 else content
+                else:
+                    # medium relevancy: use shorter content (up to 150 chars)
+                    trimmed_content = content[:150] + "..." if len(content) > 150 else content
+                
+                context_parts.append(f"[{category}] {trimmed_content}")
         
         if context_parts:
-            context = "Informasi relevan dari knowledge base:\n" + "\n".join(context_parts)
-            return context
-        else:
-            return ""
+            # intelligent context assembly
+            full_context = "\n".join(context_parts)
+            
+            # ensure total context tidak terlalu panjang untuk prompt
+            if len(full_context) > 800:
+                # prioritize higher scoring docs
+                priority_parts = []
+                current_length = 0
+                for part in context_parts:
+                    if current_length + len(part) <= 800:
+                        priority_parts.append(part)
+                        current_length += len(part)
+                    else:
+                        break
+                full_context = "\n".join(priority_parts)
+            
+            return full_context
+        
+        return ""
     
     def suggest_related_topics(self, query: str, top_k: int = 5) -> List[str]:
-        """suggest topik terkait berdasarkan query"""
+        """suggest topik terkait dengan intelligent topic discovery"""
         try:
-            retrieved_docs = self.retrieve_relevant_docs(query, top_k)
+            docs = self.retrieve_relevant_docs(query, top_k)
             topics = []
+            topic_scores = defaultdict(float)
             
-            for doc in retrieved_docs:
-                if doc['similarity_score'] > 0.6:
-                    title = doc['metadata'].get('title', '')
-                    if title and title not in topics:
-                        topics.append(title)
+            # collect topics dengan scoring
+            for doc in docs:
+                if doc['similarity_score'] > 0.3:
+                    title = doc['metadata'].get('title', '').strip()
+                    category = doc['metadata'].get('category', '')
+                    
+                    if title:
+                        # smart title processing
+                        # remove common prefixes untuk cleaner topics
+                        clean_title = re.sub(r'^(keahlian|pengalaman|proyek|hobi)\s+', '', title.lower())
+                        clean_title = clean_title.title()
+                        
+                        # score berdasarkan relevancy dan uniqueness
+                        topic_scores[clean_title] += doc['similarity_score']
             
-            return topics[:3]  # return max 3 topics
+            # sort topics by score dan return top ones
+            sorted_topics = sorted(topic_scores.items(), key=lambda x: x[1], reverse=True)
+            
+            for topic, score in sorted_topics[:3]:
+                if score > 0.4 and topic not in topics:
+                    topics.append(topic)
+            
+            # fallback: kalau kurang topics, tambah berdasarkan category
+            if len(topics) < 3:
+                category_topics = {
+                    'keahlian': ['Keahlian Python', 'Web Development', 'Data Science'],
+                    'proyek': ['Rush Hour Solver', 'Algorithm Projects', 'Portfolio Development'],
+                    'hobi': ['Street Food Journey', 'Reading Habits', 'Technology Interests'],
+                    'musik': ['Music Preferences', 'Coding Playlist', 'Nostalgic Songs']
+                }
+                
+                # detect query category
+                query_lower = query.lower()
+                for category, fallback_topics in category_topics.items():
+                    if any(keyword in query_lower for keyword in [category, category.replace('_', ' ')]):
+                        for fallback_topic in fallback_topics:
+                            if fallback_topic not in topics and len(topics) < 3:
+                                topics.append(fallback_topic)
+                        break
+            
+            return topics[:3]
             
         except Exception as e:
-            logger.error(f"failed to suggest topics: {e}")
+            logger.error(f"❌ error suggesting topics: {e}")
             return []
 
-# utility functions
+# utility functions dengan enhanced functionality
 def load_knowledge_from_file(file_path: str) -> List[Dict]:
-    """load knowledge base dari file json"""
+    """load knowledge dari json file dengan validation"""
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        return data
+        
+        # validate structure
+        required_fields = ['id', 'category', 'title', 'content']
+        valid_docs = []
+        
+        for doc in data:
+            if all(field in doc for field in required_fields):
+                valid_docs.append(doc)
+            else:
+                logger.warning(f"invalid document structure: {doc.get('id', 'unknown')}")
+        
+        logger.info(f"loaded {len(valid_docs)} valid documents from {file_path}")
+        return valid_docs
+        
     except Exception as e:
-        logger.error(f"failed to load knowledge from file: {e}")
+        logger.error(f"❌ error loading file: {e}")
         return []
 
-def initialize_rag_system(knowledge_data: List[Dict] = None, use_openai: bool = False) -> RAGSystem:
-    """initialize rag system dengan knowledge base"""
+def initialize_rag_system(knowledge_data: List[Dict] = None, use_openai: bool = False) -> Optional[SimpleRAGSystem]:
+    """initialize enhanced simple rag system"""
     try:
-        openai_key = os.getenv("OPENAI_API_KEY") if use_openai else None
-        rag = RAGSystem(
-            openai_api_key=openai_key,
-            use_local_embeddings=not use_openai
-        )
+        rag = SimpleRAGSystem()
         
         if knowledge_data:
-            success = rag.load_knowledge_base(knowledge_data)
-            if not success:
-                logger.error("failed to load knowledge base")
+            if rag.load_knowledge_base(knowledge_data):
+                logger.info("✅ enhanced simple rag system initialized successfully")
+                return rag
+            else:
+                logger.error("❌ failed to load knowledge base")
                 return None
-        
-        return rag
-        
+        else:
+            logger.warning("⚠️ no knowledge data provided")
+            return rag
+            
     except Exception as e:
-        logger.error(f"failed to initialize rag system: {e}")
+        logger.error(f"❌ error initializing enhanced rag: {e}")
         return None
