@@ -1,100 +1,59 @@
 import os
 import sys
 import json
+import logging
 import time
 import uuid
-import hashlib
-import gc
-from typing import List, Dict, Any, Optional
+import re
+from typing import List, Dict, Any, Optional, Tuple
 from collections import defaultdict
 
-# minimal imports
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import requests
+# setup logging minimal
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
 
-# setup logging
-def log(message: str, level: str = "INFO"):
-    print(f"[{level}] {time.strftime('%Y-%m-%d %H:%M:%S')} - {message}")
+logger.info("🚀 starting optimized ai portfolio backend for render (512mb)")
 
-log("🚀 Starting ChromaDB Lightweight Backend")
-
-# chromadb dengan config minimal
+# core imports saja
 try:
-    import chromadb
-    from chromadb.config import Settings
-    from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
-    
-    # custom lightweight embedding function
-    class LightweightEmbeddingFunction(EmbeddingFunction):
-        """super lightweight embedding using hash-based approach"""
-        
-        def __init__(self, embedding_dim: int = 128):  # dimensi kecil
-            self.embedding_dim = embedding_dim
-        
-        def __call__(self, input: Documents) -> Embeddings:
-            """generate embeddings using lightweight hash approach"""
-            embeddings = []
-            
-            for text in input:
-                # preprocess text
-                text_lower = text.lower()
-                words = text_lower.split()
-                
-                # create embedding vector
-                embedding = [0.0] * self.embedding_dim
-                
-                # hash-based embedding dengan TF-IDF style weighting
-                word_counts = defaultdict(int)
-                for word in words:
-                    if len(word) > 2:  # skip short words
-                        word_counts[word] += 1
-                
-                # generate embedding
-                for word, count in word_counts.items():
-                    # use multiple hash functions untuk distribusi yang lebih baik
-                    for i in range(3):  # 3 hash functions
-                        hash_val = int(hashlib.md5(f"{word}_{i}".encode()).hexdigest(), 16)
-                        idx = hash_val % self.embedding_dim
-                        
-                        # tf-idf style weighting
-                        tf = count / len(words) if words else 0
-                        embedding[idx] += tf
-                
-                # normalize embedding
-                norm = sum(x*x for x in embedding) ** 0.5
-                if norm > 0:
-                    embedding = [x/norm for x in embedding]
-                
-                embeddings.append(embedding)
-            
-            return embeddings
-    
-    CHROMADB_AVAILABLE = True
-    log("✅ ChromaDB available")
-    
+    from fastapi import FastAPI, HTTPException
+    from fastapi.middleware.cors import CORSMiddleware
+    from pydantic import BaseModel
+    import requests
+    logger.info("✅ core dependencies loaded")
+except ImportError as e:
+    logger.error(f"❌ critical import failed: {e}")
+    sys.exit(1)
+
+# sqlite vector storage
+try:
+    from sqlite_vector_storage import SQLiteVectorStorage, initialize_sqlite_rag
+    logger.info("✅ sqlite vector storage loaded")
 except ImportError:
-    CHROMADB_AVAILABLE = False
-    log("❌ ChromaDB not available")
+    logger.error("❌ sqlite_vector_storage.py not found")
+    sys.exit(1)
 
 # fastapi app
 app = FastAPI(
-    title="AI Portfolio Backend - ChromaDB Lightweight",
-    description="Optimized ChromaDB for Render free tier",
-    version="3.0.0"
+    title="AI Portfolio Backend (Optimized)",
+    description="Lightweight RAG system dengan SQLite untuk Render deployment",
+    version="2.0.0"
 )
 
-# cors
+# cors configuration
 frontend_origins = [
     "https://frontend-portofolio-danen.vercel.app",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000"
+    "https://frontend-portofolio-danen-git-master-danenftyessirs-projects.vercel.app",
+    "http://localhost:3000"
 ]
 
 env_frontend = os.getenv("FRONTEND_URL", "")
 if env_frontend:
-    frontend_origins.append(env_frontend)
+    frontend_origins.extend([url.strip() for url in env_frontend.split(',') if url.strip()])
 
 app.add_middleware(
     CORSMiddleware,
@@ -104,7 +63,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# models
+# pydantic models
 class QuestionRequest(BaseModel):
     question: str
     session_id: Optional[str] = None
@@ -114,364 +73,344 @@ class AIResponse(BaseModel):
     session_id: str
     related_topics: Optional[List[str]] = []
 
-# lightweight chromadb rag system
-class ChromaDBLightweightRAG:
+# simple conversation context
+class ConversationContext:
     def __init__(self):
-        self.client = None
-        self.collection = None
-        self.embedding_function = LightweightEmbeddingFunction(embedding_dim=128)
-        self.is_initialized = False
-        
-    def initialize(self):
-        """lazy initialization untuk hemat memory"""
-        if self.is_initialized:
-            return True
-            
-        try:
-            # chromadb client dengan config minimal
-            self.client = chromadb.Client(Settings(
-                chroma_db_impl="duckdb+parquet",  # lebih ringan dari sqlite
-                persist_directory="./chroma_lightweight",
-                anonymized_telemetry=False
-            ))
-            
-            # delete collection lama jika ada
-            try:
-                self.client.delete_collection("portfolio_lightweight")
-            except:
-                pass
-            
-            # create collection baru
-            self.collection = self.client.create_collection(
-                name="portfolio_lightweight",
-                embedding_function=self.embedding_function,
-                metadata={"hnsw:space": "cosine"}  # gunakan cosine similarity
-            )
-            
-            self.is_initialized = True
-            log("✅ ChromaDB initialized")
-            return True
-            
-        except Exception as e:
-            log(f"❌ ChromaDB init failed: {e}", "ERROR")
-            return False
+        self.history: List[Tuple[str, str]] = []  # (question, response) pairs
+        self.last_updated: float = time.time()
     
-    def add_documents(self, documents: List[Dict]):
-        """add documents ke chromadb"""
-        if not self.is_initialized:
-            if not self.initialize():
-                return False
-        
-        try:
-            # prepare data
-            texts = []
-            metadatas = []
-            ids = []
-            
-            for doc in documents:
-                # combine text untuk embedding
-                text = f"{doc.get('title', '')} {doc.get('content', '')} {' '.join(doc.get('keywords', []))}"
-                texts.append(text)
-                
-                # metadata
-                metadatas.append({
-                    "title": doc.get('title', ''),
-                    "category": doc.get('category', ''),
-                    "id": doc.get('id', '')
-                })
-                
-                ids.append(doc.get('id', str(uuid.uuid4())))
-            
-            # add to collection
-            self.collection.add(
-                documents=texts,
-                metadatas=metadatas,
-                ids=ids
-            )
-            
-            log(f"✅ Added {len(documents)} documents to ChromaDB")
-            
-            # force garbage collection
-            gc.collect()
-            
-            return True
-            
-        except Exception as e:
-            log(f"❌ Error adding documents: {e}", "ERROR")
-            return False
+    def add(self, question: str, response: str):
+        self.history.append((question, response))
+        if len(self.history) > 5:  # keep only last 5
+            self.history.pop(0)
+        self.last_updated = time.time()
     
-    def query(self, query_text: str, n_results: int = 3, category_filter: str = None):
-        """query chromadb"""
-        if not self.is_initialized:
-            return []
-            
-        try:
-            # prepare where clause
-            where = None
-            if category_filter:
-                where = {"category": category_filter}
-            
-            # query
-            results = self.collection.query(
-                query_texts=[query_text],
-                n_results=n_results,
-                where=where
-            )
-            
-            # parse results
-            if results and results['documents'] and len(results['documents'][0]) > 0:
-                docs = []
-                for i in range(len(results['documents'][0])):
-                    docs.append({
-                        'content': results['documents'][0][i],
-                        'metadata': results['metadatas'][0][i],
-                        'distance': results['distances'][0][i] if 'distances' in results else 0
-                    })
-                return docs
-            
-            return []
-            
-        except Exception as e:
-            log(f"❌ Query error: {e}", "ERROR")
-            return []
-    
-    def cleanup(self):
-        """cleanup untuk hemat memory"""
-        if self.collection:
-            self.collection = None
-        if self.client:
-            self.client = None
-        self.is_initialized = False
-        gc.collect()
+    def get_context(self) -> str:
+        if not self.history:
+            return ""
+        last_q, last_r = self.history[-1]
+        return f"Pertanyaan sebelumnya: {last_q[:50]}..."
 
-# global instances
-rag_system = None
+# global state minimal
 conversation_sessions = {}
-knowledge_base = []
+rag_system: Optional[SQLiteVectorStorage] = None
 
-# load knowledge base
-def load_portfolio_knowledge():
-    """load portfolio knowledge"""
+def load_portfolio_knowledge() -> List[Dict]:
+    """load knowledge base dari file atau default"""
     try:
         if os.path.exists("portfolio.json"):
             with open("portfolio.json", "r", encoding="utf-8") as f:
                 data = json.load(f)
-                log(f"✅ Loaded {len(data)} documents")
+                logger.info(f"✅ loaded {len(data)} documents from portfolio.json")
                 return data
     except Exception as e:
-        log(f"❌ Error loading portfolio.json: {e}", "ERROR")
+        logger.error(f"❌ error loading portfolio.json: {e}")
     
-    # fallback data
+    # default knowledge base minimal
     return [
         {
-            "id": "profil_dasar",
+            "id": "profil",
             "category": "profil",
-            "title": "Profil Dasar Danendra",
-            "content": "Nama saya Danendra Shafi Athallah, mahasiswa Teknik Informatika ITB semester 4 yang berdomisili di Jakarta. Saya passionate di bidang data science dan algoritma.",
-            "keywords": ["nama", "profil", "itb", "jakarta"]
+            "title": "Profil Danendra",
+            "content": "Danendra Shafi Athallah, mahasiswa Teknik Informatika ITB semester 4 dari Jakarta. Passionate di data science dan algoritma dengan 2 tahun web development dan 1 tahun data science.",
+            "keywords": ["danendra", "itb", "informatika", "jakarta"]
         },
         {
             "id": "keahlian_python",
             "category": "keahlian",
-            "title": "Keahlian Python",
-            "content": "Python adalah bahasa utama saya untuk data science. Menguasai pandas, scikit-learn, matplotlib untuk analisis data dan machine learning.",
-            "keywords": ["python", "data science", "machine learning"]
+            "title": "Python & Data Science",
+            "content": "Menguasai Python untuk data science: pandas, scikit-learn, matplotlib, numpy. Berpengalaman membuat model machine learning dan analisis data.",
+            "keywords": ["python", "data science", "pandas", "machine learning"]
+        },
+        {
+            "id": "keahlian_web",
+            "category": "keahlian",
+            "title": "Web Development",
+            "content": "Experienced dengan Next.js, React, TypeScript, Tailwind CSS. Portfolio ini dibuat dengan Next.js + Python FastAPI.",
+            "keywords": ["nextjs", "react", "typescript", "web"]
         },
         {
             "id": "proyek_rushhour",
             "category": "proyek",
             "title": "Rush Hour Solver",
-            "content": "Rush Hour Solver dengan algoritma pathfinding - UCS, Greedy, A*, dan Dijkstra untuk menyelesaikan puzzle secara optimal.",
-            "keywords": ["rush hour", "algoritma", "pathfinding"]
+            "content": "Implementasi algoritma pathfinding (UCS, Greedy, A*, Dijkstra) untuk menyelesaikan puzzle Rush Hour dengan visualisasi interaktif.",
+            "keywords": ["rush hour", "algoritma", "pathfinding", "puzzle"]
+        },
+        {
+            "id": "proyek_alchemy",
+            "category": "proyek",
+            "title": "Little Alchemy Solver",
+            "content": "Aplikasi pencarian resep Little Alchemy menggunakan BFS, DFS, dan Bidirectional Search dengan optimasi graph theory.",
+            "keywords": ["little alchemy", "bfs", "dfs", "graph"]
+        },
+        {
+            "id": "rekrutmen",
+            "category": "rekrutmen",
+            "title": "Why Hire Me",
+            "content": "Kombinasi solid teori dan praktek data science, track record project sukses, learning agility tinggi, dan kemampuan komunikasi technical concepts.",
+            "keywords": ["rekrutmen", "hire", "kelebihan", "value"]
         }
     ]
 
-# categorize question
 def categorize_question(question: str) -> str:
-    """categorize question"""
+    """simple question categorization"""
     q_lower = question.lower()
     
-    if any(k in q_lower for k in ["python", "java", "skill", "keahlian"]):
+    # personal protection
+    personal_keywords = ["pacar", "umur", "alamat", "agama", "gaji"]
+    if any(kw in q_lower for kw in personal_keywords):
+        return "personal"
+    
+    # technical categories
+    if any(kw in q_lower for kw in ["python", "java", "react", "skill", "keahlian"]):
         return "keahlian"
-    elif any(k in q_lower for k in ["proyek", "project", "rush", "alchemy"]):
+    elif any(kw in q_lower for kw in ["proyek", "project", "rush hour", "alchemy"]):
         return "proyek"
-    elif any(k in q_lower for k in ["nama", "siapa", "kuliah", "itb"]):
-        return "profil"
-    elif any(k in q_lower for k in ["rekrut", "hire", "kenapa"]):
+    elif any(kw in q_lower for kw in ["rekrut", "hire", "kenapa"]):
         return "rekrutmen"
     
     return "general"
 
-# generate response
-def generate_response(question: str, rag_context: List[Dict]) -> str:
-    """generate response dengan rag context"""
-    
-    # build context string
-    context_str = ""
-    if rag_context:
-        for doc in rag_context[:2]:  # limit context
-            content = doc.get('content', '')
-            if len(content) > 150:
-                content = content[:150] + "..."
-            context_str += f"{content}\n"
-    
-    # try openai
-    try:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if api_key and context_str:
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}"
-            }
-            
-            prompt = f"""Kamu adalah AI assistant Danendra. Jawab dalam bahasa Indonesia yang santai.
+def create_prompt(question: str, rag_context: str, conv_context: str = "") -> str:
+    """create prompt untuk openai"""
+    prompt = f"""
+Kamu adalah asisten AI Danendra Shafi Athallah. Jawab dengan bahasa Indonesia yang santai dan informatif.
 
-Konteks dari knowledge base:
-{context_str}
+INFORMASI DARI DATABASE:
+{rag_context}
+
+{f"KONTEKS PERCAKAPAN: {conv_context}" if conv_context else ""}
 
 Pertanyaan: {question}
 
-Jawab singkat dalam 2-3 kalimat."""
+Instruksi:
+- Jawab dengan natural dan to the point
+- Gunakan informasi dari database
+- Bahasa Indonesia santai
+- Max 3-4 kalimat
+"""
+    return prompt
 
-            payload = {
+def generate_fallback_response(question: str, category: str) -> str:
+    """fallback responses"""
+    if category == "personal":
+        return "Info pribadi prefer tidak dibahas ya. Mending tanya tentang skill atau project aku!"
+    
+    responses = {
+        "keahlian": "Aku punya keahlian di Python untuk data science dan Next.js untuk web development.",
+        "proyek": "Project favorit aku Rush Hour Solver dan Little Alchemy Solver, keduanya pakai algoritma kompleks.",
+        "rekrutmen": "Aku bawa kombinasi solid antara teori dan praktek di data science dengan track record project sukses.",
+        "general": "Hai! Aku Danendra, mahasiswa Teknik Informatika ITB yang passionate di data science."
+    }
+    
+    return responses.get(category, "Aku Danendra, passionate di data science dan web development!")
+
+def call_openai_api(prompt: str) -> Optional[str]:
+    """call openai api dengan error handling"""
+    try:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            return None
+        
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}"
+            },
+            json={
                 "model": "gpt-3.5-turbo",
                 "messages": [
-                    {"role": "system", "content": "Kamu AI assistant portfolio Danendra."},
+                    {"role": "system", "content": "Kamu adalah asisten AI yang membantu menjawab pertanyaan tentang portfolio."},
                     {"role": "user", "content": prompt}
                 ],
-                "max_tokens": 100,
-                "temperature": 0.7
-            }
-            
-            response = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                return response.json()["choices"][0]["message"]["content"].strip()
-                
+                "max_tokens": 200,
+                "temperature": 0.8
+            },
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"].strip()
+        
+        return None
+        
     except Exception as e:
-        log(f"OpenAI error: {e}", "ERROR")
-    
-    # fallback response dengan context
-    if context_str:
-        return f"Berdasarkan informasi yang ada, {context_str[:100]}..."
-    
-    # ultimate fallback
-    category = categorize_question(question)
-    fallbacks = {
-        "keahlian": "Aku punya keahlian di Python untuk data science dan web development dengan Next.js.",
-        "proyek": "Proyek unggulan aku adalah Rush Hour Solver dan Little Alchemy Solver dengan algoritma kompleks.",
-        "profil": "Aku Danendra, mahasiswa Teknik Informatika ITB yang passionate di data science!",
-        "general": "Aku Danendra, mahasiswa ITB yang fokus di data science dan algoritma."
-    }
-    
-    return fallbacks.get(category, fallbacks["general"])
+        logger.error(f"openai api error: {e}")
+        return None
 
-# endpoints
-@app.get("/")
-async def root():
-    return {
-        "message": "AI Portfolio Backend - ChromaDB Lightweight",
-        "status": "healthy",
-        "chromadb": CHROMADB_AVAILABLE,
-        "memory_optimized": True
-    }
-
-@app.post("/ask")
-async def ask_ai(request: QuestionRequest):
-    """main endpoint"""
+@app.on_event("startup")
+async def startup_event():
+    """startup initialization"""
     global rag_system
     
     try:
-        # lazy init rag system
-        if CHROMADB_AVAILABLE and not rag_system:
-            rag_system = ChromaDBLightweightRAG()
-            if rag_system.initialize():
-                rag_system.add_documents(knowledge_base)
+        logger.info("initializing sqlite rag system...")
+        
+        # load knowledge
+        knowledge_data = load_portfolio_knowledge()
+        
+        # initialize rag
+        rag_system = initialize_sqlite_rag(knowledge_data)
+        
+        if rag_system:
+            stats = rag_system.get_stats()
+            logger.info(f"✅ rag system ready: {stats}")
+        else:
+            logger.error("❌ rag system initialization failed")
+        
+        logger.info("✅ startup completed!")
+        
+    except Exception as e:
+        logger.error(f"❌ startup error: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """cleanup on shutdown"""
+    global rag_system
+    if rag_system:
+        rag_system.close()
+
+@app.get("/")
+async def root():
+    """health check endpoint"""
+    stats = rag_system.get_stats() if rag_system else {}
+    
+    return {
+        "message": "AI Portfolio Backend (Optimized for Render)",
+        "status": "healthy",
+        "memory_optimized": True,
+        "rag_system": "SQLite Vector Storage",
+        "rag_stats": stats,
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY"))
+    }
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": time.time()}
+
+@app.post("/ask", response_model=AIResponse)
+async def ask_ai(request: QuestionRequest):
+    """main ai endpoint"""
+    try:
+        # validate input
+        if len(request.question.strip()) < 2:
+            return AIResponse(
+                response="Pertanyaanmu terlalu singkat. Coba tanyakan lebih detail!",
+                session_id=request.session_id or str(uuid.uuid4())
+            )
+        
+        # session management
+        session_id = request.session_id or str(uuid.uuid4())
+        
+        # cleanup old sessions (memory optimization)
+        current_time = time.time()
+        sessions_to_remove = [
+            sid for sid, ctx in conversation_sessions.items()
+            if current_time - ctx.last_updated > 900  # 15 minutes
+        ]
+        for sid in sessions_to_remove:
+            del conversation_sessions[sid]
+        
+        # get or create context
+        if session_id not in conversation_sessions:
+            conversation_sessions[session_id] = ConversationContext()
+        
+        context = conversation_sessions[session_id]
+        
+        # categorize question
+        category = categorize_question(request.question)
+        
+        # handle personal questions
+        if category == "personal":
+            response = generate_fallback_response(request.question, category)
+            context.add(request.question, response)
+            return AIResponse(response=response, session_id=session_id)
         
         # get rag context
-        rag_context = []
+        rag_context = ""
         related_topics = []
         
         if rag_system:
-            category = categorize_question(request.question)
-            rag_context = rag_system.query(
+            rag_context = rag_system.build_context(request.question)
+            related_topics = rag_system.suggest_topics(request.question)
+        
+        # try openai first
+        response_text = None
+        if rag_context:
+            prompt = create_prompt(
                 request.question, 
-                n_results=3,
-                category_filter=category if category != "general" else None
+                rag_context,
+                context.get_context()
             )
-            
-            # extract related topics
-            for doc in rag_context[:3]:
-                title = doc.get('metadata', {}).get('title', '')
-                if title:
-                    related_topics.append(title)
+            response_text = call_openai_api(prompt)
         
-        # generate response
-        response_text = generate_response(request.question, rag_context)
+        # fallback if openai fails
+        if not response_text:
+            if rag_context:
+                # use rag context for response
+                response_text = f"Berdasarkan yang aku tahu, {rag_context[:200]}... Ada yang mau ditanyakan lebih detail?"
+            else:
+                # pure fallback
+                response_text = generate_fallback_response(request.question, category)
         
-        # cleanup sessions untuk hemat memory
-        if len(conversation_sessions) > 20:
-            oldest = min(conversation_sessions.keys())
-            del conversation_sessions[oldest]
-        
-        session_id = request.session_id or str(uuid.uuid4())
-        conversation_sessions[session_id] = time.time()
-        
-        # periodic cleanup
-        if len(conversation_sessions) % 10 == 0:
-            gc.collect()
+        # update context
+        context.add(request.question, response_text)
         
         return AIResponse(
             response=response_text,
             session_id=session_id,
-            related_topics=related_topics[:3]
+            related_topics=related_topics
         )
         
     except Exception as e:
-        log(f"Error: {e}", "ERROR")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"error in ask endpoint: {e}")
+        return AIResponse(
+            response="Maaf ada error. Coba lagi ya!",
+            session_id=request.session_id or str(uuid.uuid4())
+        )
+
+@app.post("/ask-mock", response_model=AIResponse)
+async def ask_ai_mock(request: QuestionRequest):
+    """mock endpoint for testing"""
+    session_id = request.session_id or str(uuid.uuid4())
+    
+    # get rag context
+    rag_context = ""
+    related_topics = []
+    
+    if rag_system:
+        rag_context = rag_system.build_context(request.question)
+        related_topics = rag_system.suggest_topics(request.question)
+    
+    if rag_context:
+        response = f"[Mock] Berdasarkan database: {rag_context[:150]}..."
+    else:
+        response = "[Mock] Aku Danendra, mahasiswa ITB yang passionate di data science!"
+    
+    return AIResponse(
+        response=response,
+        session_id=session_id,
+        related_topics=related_topics
+    )
 
 @app.get("/rag-status")
-async def rag_status():
-    """check rag status"""
-    if rag_system and rag_system.is_initialized:
+async def get_rag_status():
+    """rag system status"""
+    if rag_system:
         return {
             "status": "healthy",
-            "type": "ChromaDB Lightweight",
-            "embedding_dim": 128,
-            "documents": len(knowledge_base)
+            "system": "SQLite Vector Storage",
+            "stats": rag_system.get_stats(),
+            "memory_efficient": True
         }
     else:
         return {
             "status": "not_initialized",
-            "chromadb_available": CHROMADB_AVAILABLE
+            "system": "None"
         }
 
-@app.on_event("startup")
-async def startup():
-    """startup event"""
-    global knowledge_base
-    
-    log("🔧 Starting up...")
-    knowledge_base = load_portfolio_knowledge()
-    
-    # tidak init chromadb di startup untuk hemat memory
-    # akan di-init lazy saat pertama kali digunakan
-    
-    log("✅ Ready!")
-
-@app.on_event("shutdown")
-async def shutdown():
-    """cleanup on shutdown"""
-    if rag_system:
-        rag_system.cleanup()
-    gc.collect()
-
+# untuk local testing
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))

@@ -1,57 +1,39 @@
-# file konfigurasi
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
-
-# direktori node
 node_modules/
-
-# file log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
-# direktori build
 .next/
 out/
 build/
 dist/
-
-# file cache
 .vercel
 .turbo
 __pycache__/
 *.py[cod]
 *$py.class
-
-# virtual environment python
 venv/
 env/
 ENV/
 .venv/
 .env/
 .ENV/
-
-# IDE dan editor
 .idea/
 .vscode/
 *.swp
 *.swo
 .DS_Store
-
-# python distribusi / packaging
 *.egg
 *.egg-info/
 .installed.cfg
 *.egg-info
-
-# coverage / testing
 .coverage
 htmlcov/
 coverage/
 .pytest_cache/
-
-# jupyter notebook
+portfolio_vectors.db
 .ipynb_checkpoints
