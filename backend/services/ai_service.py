@@ -103,16 +103,18 @@ class AIService:
                     if "question" in item and "response" in item:
                         conversation_context += f"User: {item['question']}\nAssistant: {item['response']}\n\n"
             
-            # build full prompt
-            full_prompt = f"""{system_prompt}
-
-{f"Informasi relevan dari knowledge base:\n{context}\n" if context else ""}
-
-{f"Konteks percakapan sebelumnya:\n{conversation_context}" if conversation_context else ""}
-
-Pertanyaan user: {question}
-
-Jawab dengan natural dan sesuai personality yang telah dijelaskan:"""
+            # build full prompt dengan menghindari backslash di f-string
+            newline = "\n"
+            
+            full_prompt = f"{system_prompt}{newline}{newline}"
+            
+            if context:
+                full_prompt += f"Informasi relevan dari knowledge base:{newline}{context}{newline}{newline}"
+            
+            if conversation_context:
+                full_prompt += f"Konteks percakapan sebelumnya:{newline}{conversation_context}{newline}"
+            
+            full_prompt += f"Pertanyaan user: {question}{newline}{newline}Jawab dengan natural dan sesuai personality yang telah dijelaskan:"
             
             # call gemini api
             def sync_call():
