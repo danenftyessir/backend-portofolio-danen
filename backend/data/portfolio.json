@@ -1,0 +1,224 @@
+[
+  {
+    "id": "profil_dasar",
+    "category": "profil",
+    "title": "Profil Dasar Danendra",
+    "content": "Nama saya Danendra Shafi Athallah, mahasiswa Teknik Informatika ITB semester 4 yang berdomisili di Jakarta. Saya passionate di bidang data science dan algoritma dengan pengalaman 2 tahun web development dan 1 tahun fokus data science. Motto hidup saya adalah 'Menuju tak terbatas dan melampauinya'.",
+    "keywords": ["nama", "profil", "biodata", "siapa", "diri", "jakarta", "itb"]
+  },
+  {
+    "id": "keahlian_python",
+    "category": "keahlian",
+    "title": "Keahlian Python & Data Science",
+    "content": "Python adalah bahasa utama saya untuk analisis data dan machine learning. Saya menguasai pandas untuk data manipulation, scikit-learn untuk machine learning models, matplotlib dan seaborn untuk visualization, dan numpy untuk numerical computing. Pengalaman 1 tahun khusus di data science dengan berbagai project algoritma kompleks.",
+    "keywords": [
+      "python",
+      "data science",
+      "pandas",
+      "scikit-learn",
+      "machine learning",
+      "algoritma"
+    ]
+  },
+  {
+    "id": "keahlian_web",
+    "category": "keahlian",
+    "title": "Keahlian Web Development",
+    "content": "Untuk web development, saya experienced dengan Next.js dan React untuk frontend, plus kemampuan integrate dengan backend services. Portfolio ini sendiri dibuat dengan Next.js + TypeScript, Python FastAPI, dan ditenagai OpenAI. Saya juga menguasai Tailwind CSS untuk styling dan telah mengembangkan berbagai aplikasi web selama 2 tahun terakhir.",
+    "keywords": [
+      "next.js",
+      "react",
+      "web development",
+      "typescript",
+      "tailwind",
+      "frontend"
+    ]
+  },
+  {
+    "id": "proyek_rushhour",
+    "category": "proyek",
+    "title": "Rush Hour Puzzle Solver",
+    "content": "Rush Hour Puzzle Solver adalah project yang paling technically challenging dan educational. Saya implement multiple pathfinding algorithms - UCS untuk optimal solutions, Greedy Best-First untuk speed, A* untuk balanced approach, dan Dijkstra untuk comprehensive exploration. Biggest challenge adalah optimizing algorithm performance untuk handle complex puzzle configurations. Saya juga develop custom heuristic functions dan implement efficient state representation untuk minimize memory usage. Plus, created interactive visualization yang allow users untuk understand algorithm behavior step-by-step.",
+    "keywords": [
+      "rush hour",
+      "puzzle",
+      "algoritma",
+      "pathfinding",
+      "a*",
+      "dijkstra",
+      "ucs",
+      "visualisasi"
+    ]
+  },
+  {
+    "id": "proyek_alchemy",
+    "category": "proyek",
+    "title": "Little Alchemy Search Algorithm",
+    "content": "Little Alchemy Solver project yang paling intellectually stimulating karena involve complex graph theory applications. Implementation cover BFS untuk breadth exploration, DFS untuk depth analysis, dan Bidirectional Search untuk optimal pathfinding dalam recipe combination space. Challenge utama adalah handling directed graph dengan dynamic recipe dependencies dan optimizing search strategies untuk minimize computation time. Saya develop sophisticated pruning techniques dan implement memoization untuk avoid redundant computations.",
+    "keywords": [
+      "little alchemy",
+      "algoritma pencarian",
+      "bfs",
+      "dfs",
+      "bidirectional search",
+      "graph theory"
+    ]
+  },
+  {
+    "id": "proyek_iqpuzzler",
+    "category": "proyek",
+    "title": "IQ Puzzler Pro Solver",
+    "content": "IQ Puzzler Pro Solver menggunakan algoritma brute force dengan backtracking yang efficient. Tantangan utama adalah state space yang sangat besar karena banyaknya kombinasi yang mungkin. Saya implement backtracking dengan pruning yang efficient untuk mencegah stack overflow dan optimize performance untuk puzzle solving yang kompleks.",
+    "keywords": [
+      "iq puzzler",
+      "brute force",
+      "backtracking",
+      "java",
+      "javafx",
+      "puzzle solving"
+    ]
+  },
+  {
+    "id": "hobi_membaca",
+    "category": "hobi",
+    "title": "Hobi Membaca Novel",
+    "content": "Reading habit saya mulai SMA, pas discover fantasy novels. 'Omniscient Reader Viewpoint' jadi turning point yang bikin saya appreciate storytelling complexity dan world-building yang creative. Saya suka genre fantasy, sci-fi, dan novel yang punya sistem kompleks. Reading ini somehow connect ke cara kerja saya dalam problem-solving - analytical thinking dari reading ngajarin saya appreciate complexity dalam system design.",
+    "keywords": [
+      "membaca",
+      "novel",
+      "omniscient reader",
+      "fantasy",
+      "sci-fi",
+      "buku"
+    ]
+  },
+  {
+    "id": "hobi_kuliner",
+    "category": "hobi",
+    "title": "Penggemar Street Food",
+    "content": "Street food Indonesian jadi obsesi saya. Martabak manis, sate ayam, gorengan, ketoprak, batagor - semuanya punya cerita unik. Yang bikin saya obsessed sama street food adalah culture dan experience-nya. Bukan cuma soal rasa, tapi social interaction dengan penjual, atmosphere di pinggir jalan, dan feeling nostalgic yang ga bisa didapat di restoran fancy. Jakarta punya spot-spot legendary kayak Sabang, Pecenongan yang classic banget buat late night food hunting.",
+    "keywords": [
+      "street food",
+      "martabak",
+      "sate",
+      "gorengan",
+      "ketoprak",
+      "batagor",
+      "kuliner"
+    ]
+  },
+  {
+    "id": "musik_favorit",
+    "category": "musik",
+    "title": "Selera Musik Oldies & Nostalgia",
+    "content": "Selera musik saya nostalgic & oldies. Lagi relate banget sama 'Without You' Air Supply dan 'Sekali Ini Saja' Glenn Fredly. Oldies punya emotional depth dan musical complexity yang susah dicari di modern music. Lirik-liriknya meaningful, production quality tinggi, dan timeless. Untuk coding biasanya pakai lo-fi beats atau soundtrack film kayak Star Wars yang bikin suasana lebih intens. Glenn Fredly special karena pioneer Indonesian jazz-soul dengan voice quality yang luar biasa.",
+    "keywords": [
+      "musik",
+      "oldies",
+      "air supply",
+      "glenn fredly",
+      "without you",
+      "sekali ini saja",
+      "lo-fi"
+    ]
+  },
+  {
+    "id": "pengalaman_kuliah",
+    "category": "pendidikan",
+    "title": "Pengalaman Kuliah di ITB",
+    "content": "Kuliah di ITB memberikan culture shock karena banyak mahasiswa sudah fasih dengan dunia IT sejak kecil, berbeda dengan saya yang baru memulai. Pace pembelajaran yang sangat cepat juga membuat saya harus beradaptasi dengan baik. Tapi justru ini yang membuat saya grow dan develop learning agility yang kuat. Saya jadi asisten praktikum Berpikir Komputasional dan active di organizing committees seperti Arkavidia divisi academy untuk bootcamp path data science.",
+    "keywords": [
+      "itb",
+      "kuliah",
+      "culture shock",
+      "asisten praktikum",
+      "arkavidia",
+      "pendidikan"
+    ]
+  },
+  {
+    "id": "lomba_datathon",
+    "category": "prestasi",
+    "title": "Pengalaman Lomba Datathon UI",
+    "content": "Datathon UI adalah pengalaman lomba data science yang paling berkesan karena kompleksitasnya yang menantang. Event ini ngajarin saya tentang end-to-end data science pipeline dalam kondisi competitive dan time pressure yang ketat. Saya belajar banyak tentang rapid prototyping, model optimization, dan presentation skills untuk communicate insights ke audience yang diverse.",
+    "keywords": [
+      "datathon",
+      "lomba",
+      "kompetisi",
+      "data science",
+      "ui",
+      "prestasi"
+    ]
+  },
+  {
+    "id": "tools_favorit",
+    "category": "tools",
+    "title": "Tools dan Software Favorit",
+    "content": "Python jadi bahasa utama untuk analisis data dan machine learning. VS Code adalah editor favorit dengan banyak extension untuk produktivitas. Jupyter Notebook untuk eksplorasi dan visualisasi data. Git untuk version control dan tracking proyek. Figma untuk wireframing dan design. Kombinasi tools ini memungkinkan workflow yang efficient dari ideation sampai deployment.",
+    "keywords": [
+      "tools",
+      "python",
+      "vs code",
+      "jupyter",
+      "git",
+      "figma",
+      "software"
+    ]
+  },
+  {
+    "id": "rencana_masa_depan",
+    "category": "visi",
+    "title": "Rencana dan Visi Masa Depan",
+    "content": "Fokus saya adalah memperdalam keahlian di bidang data science dan algoritma, lulus dengan prestasi terbaik, dan berkarir di perusahaan teknologi terkemuka. Saya ingin berkontribusi dalam pengembangan AI dan machine learning yang dapat memberikan impact positif. Long term goal adalah menjadi expert di intersection antara data science dan software engineering.",
+    "keywords": [
+      "masa depan",
+      "rencana",
+      "karir",
+      "data science",
+      "visi",
+      "goals"
+    ]
+  },
+  {
+    "id": "karakter_kepribadian",
+    "category": "karakter",
+    "title": "Karakter dan Kepribadian",
+    "content": "Saya tipe yang mudah beradaptasi di lingkungan baru dan berani mengambil tantangan. Dalam teamwork, saya bisa menyesuaikan peran sebagai pemimpin atau anggota tim sesuai kebutuhan. Communication style saya terbuka dalam komunikasi, senang berdiskusi tentang ide dan konsep baru. Saya juga learning agility yang tinggi - cepat adapt dengan teknologi baru dan selalu penasaran sama challenge yang belum pernah encountered sebelumnya.",
+    "keywords": [
+      "karakter",
+      "kepribadian",
+      "adaptasi",
+      "leadership",
+      "komunikasi",
+      "learning"
+    ]
+  },
+  {
+    "id": "manajemen_stres",
+    "category": "lifestyle",
+    "title": "Manajemen Stres dan Work-Life Balance",
+    "content": "Untuk mengatasi stres dari deadline dan pressure kuliah, saya biasanya menonton film horror/romance atau drama Korea untuk relaksasi. Kadang juga keliling cari street food sebagai stress reliever yang ga perlu planning ribet. Manajemen waktu saya cukup ketat - membagi waktu antara mengerjakan projek, tugas besar, dan belajar untuk ujian. Untuk coding, saya terkadang lebih produktif saat malam hari.",
+    "keywords": [
+      "stres",
+      "manajemen",
+      "waktu",
+      "work life balance",
+      "relaksasi",
+      "produktivitas"
+    ]
+  },
+  {
+    "id": "rekrutmen_value",
+    "category": "rekrutmen",
+    "title": "Why You Should Recruit Me",
+    "content": "Saya bawa kombinasi teori dan praktek di data science yang solid. Track record di berbagai algorithmic projects, academic performance yang konsisten, dan keterlibatan aktif di tech community. Yang bikin saya beda adalah learning agility yang tinggi, systematic approach dalam problem decomposition, dan kemampuan communicate technical concepts ke diverse audiences. Plus, experience sebagai asisten praktikum ngajarin effective collaboration dan knowledge transfer skills.",
+    "keywords": [
+      "rekrutmen",
+      "hire",
+      "kelebihan",
+      "value proposition",
+      "team",
+      "collaboration"
+    ]
+  }
+]

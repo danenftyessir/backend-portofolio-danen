@@ -8,21 +8,21 @@ import difflib
 logger = logging.getLogger(__name__)
 
 class SimpleRAGSystem:
-    """enhanced simple rag system with full functionality matching chromadb version"""
+    """enhanced simple rag system dengan full functionality"""
     
     def __init__(self):
         self.documents: List[Dict] = []
         self.keyword_index: Dict[str, List[int]] = defaultdict(list)
         self.category_index: Dict[str, List[int]] = defaultdict(list)
         self.title_index: Dict[str, int] = {}
-        self.content_vectors: List[Dict[str, float]] = []  # tf-idf style vectors
+        self.content_vectors: List[Dict[str, float]] = []
         
     def load_knowledge_base(self, knowledge_data: List[Dict]) -> bool:
-        """load dan index knowledge base dengan advanced indexing"""
+        """load dan index knowledge base"""
         try:
             self.documents = knowledge_data
             self._build_advanced_indexes()
-            logger.info(f"✅ enhanced simple rag loaded {len(knowledge_data)} documents")
+            logger.info(f"✅ simple rag loaded {len(knowledge_data)} documents")
             return True
         except Exception as e:
             logger.error(f"❌ error loading knowledge base: {e}")
@@ -30,7 +30,6 @@ class SimpleRAGSystem:
     
     def _build_advanced_indexes(self):
         """build comprehensive indexes untuk efficient retrieval"""
-        # document frequency untuk tf-idf calculation
         doc_freq = defaultdict(int)
         all_words = set()
         
@@ -63,7 +62,7 @@ class SimpleRAGSystem:
             
             # build word index untuk fast lookup
             for word in meaningful_words:
-                if word not in self.keyword_index[word]:
+                if i not in self.keyword_index[word]:
                     self.keyword_index[word].append(i)
         
         # second pass: build tf-idf style vectors
@@ -91,9 +90,9 @@ class SimpleRAGSystem:
                 # weight boost untuk keywords dan title
                 weight_multiplier = 1.0
                 if word in [kw.lower() for kw in keywords]:
-                    weight_multiplier = 3.0  # keywords get higher weight
+                    weight_multiplier = 3.0
                 elif word in title:
-                    weight_multiplier = 2.0  # title words get medium weight
+                    weight_multiplier = 2.0
                 
                 doc_vector[word] = tf * idf * weight_multiplier
             
@@ -128,26 +127,26 @@ class SimpleRAGSystem:
                         
                         # progressive scoring
                         if word in keywords:
-                            doc_scores[doc_idx] += 5.0  # exact keyword match
+                            doc_scores[doc_idx] += 5.0
                         elif word in title:
-                            doc_scores[doc_idx] += 3.0  # title match
+                            doc_scores[doc_idx] += 3.0
                         elif word in content:
-                            doc_scores[doc_idx] += 1.0  # content match
+                            doc_scores[doc_idx] += 1.0
                 
-                # method 2: fuzzy matching untuk typos dan variations
+                # method 2: fuzzy matching untuk typos
                 similar_words = difflib.get_close_matches(
                     word, self.keyword_index.keys(), n=3, cutoff=0.8
                 )
                 for similar_word in similar_words:
-                    if similar_word != word:  # avoid double counting
+                    if similar_word != word:
                         for doc_idx in self.keyword_index[similar_word]:
                             if category_filter:
                                 doc_category = self.documents[doc_idx].get('category', '')
                                 if doc_category != category_filter:
                                     continue
-                            doc_scores[doc_idx] += 0.5  # fuzzy match bonus
+                            doc_scores[doc_idx] += 0.5
             
-            # method 3: tf-idf style similarity untuk comprehensive matching
+            # method 3: tf-idf style similarity
             for doc_idx, doc_vector in enumerate(self.content_vectors):
                 if category_filter:
                     doc_category = self.documents[doc_idx].get('category', '')
@@ -164,39 +163,18 @@ class SimpleRAGSystem:
                         word_weight = doc_vector[word]
                         dot_product += word_weight
                         doc_vector_sum += word_weight ** 2
-                        query_vector_sum += 1  # simple query term weight
+                        query_vector_sum += 1
                 
                 if doc_vector_sum > 0 and query_vector_sum > 0:
                     similarity = dot_product / (doc_vector_sum ** 0.5 * query_vector_sum ** 0.5)
-                    doc_scores[doc_idx] += similarity * 2.0  # tf-idf bonus
+                    doc_scores[doc_idx] += similarity * 2.0
             
-            # method 4: category relevance bonus
-            if not category_filter:  # only kalau tidak ada explicit filter
-                for doc_idx in range(len(self.documents)):
-                    doc_category = self.documents[doc_idx].get('category', '')
-                    
-                    # boost score untuk categories yang sering dimention dalam query
-                    category_boost_map = {
-                        'keahlian': ['python', 'skill', 'kemampuan', 'expertise'],
-                        'proyek': ['project', 'proyek', 'aplikasi', 'sistem'],
-                        'musik': ['lagu', 'musik', 'song', 'artist'],
-                        'hobi': ['hobi', 'suka', 'gemar', 'hobby'],
-                        'pengalaman': ['pengalaman', 'experience', 'pernah']
-                    }
-                    
-                    for category, trigger_words in category_boost_map.items():
-                        if doc_category == category:
-                            for trigger in trigger_words:
-                                if trigger in query.lower():
-                                    doc_scores[doc_idx] += 1.0
-                                    break
-            
-            # sort by score dan return top_k dengan metadata
+            # sort by score dan return top_k
             sorted_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
             
             results = []
             for doc_idx, score in sorted_docs[:top_k]:
-                if score > 0.1:  # threshold untuk relevancy
+                if score > 0.1:
                     doc = self.documents[doc_idx]
                     results.append({
                         'content': f"{doc['title']}: {doc['content']}",
@@ -205,7 +183,7 @@ class SimpleRAGSystem:
                             'category': doc['category'],
                             'keywords': doc.get('keywords', [])
                         },
-                        'similarity_score': min(score / 10.0, 1.0)  # normalize score
+                        'similarity_score': min(score / 10.0, 1.0)
                     })
             
             logger.info(f"retrieved {len(results)} docs for query: {query[:50]}...")
@@ -224,27 +202,23 @@ class SimpleRAGSystem:
         
         context_parts = []
         for doc in docs:
-            if doc['similarity_score'] > 0.2:  # relevancy threshold
+            if doc['similarity_score'] > 0.2:
                 content = doc['content']
                 category = doc['metadata']['category']
                 
                 # intelligent content trimming berdasarkan relevancy
                 if doc['similarity_score'] > 0.7:
-                    # high relevancy: use full content (up to 300 chars)
                     trimmed_content = content[:300] + "..." if len(content) > 300 else content
                 else:
-                    # medium relevancy: use shorter content (up to 150 chars)
                     trimmed_content = content[:150] + "..." if len(content) > 150 else content
                 
                 context_parts.append(f"[{category}] {trimmed_content}")
         
         if context_parts:
-            # intelligent context assembly
             full_context = "\n".join(context_parts)
             
-            # ensure total context tidak terlalu panjang untuk prompt
+            # ensure total context tidak terlalu panjang
             if len(full_context) > 800:
-                # prioritize higher scoring docs
                 priority_parts = []
                 current_length = 0
                 for part in context_parts:
@@ -270,25 +244,22 @@ class SimpleRAGSystem:
             for doc in docs:
                 if doc['similarity_score'] > 0.3:
                     title = doc['metadata'].get('title', '').strip()
-                    category = doc['metadata'].get('category', '')
                     
                     if title:
                         # smart title processing
-                        # remove common prefixes untuk cleaner topics
                         clean_title = re.sub(r'^(keahlian|pengalaman|proyek|hobi)\s+', '', title.lower())
                         clean_title = clean_title.title()
                         
-                        # score berdasarkan relevancy dan uniqueness
                         topic_scores[clean_title] += doc['similarity_score']
             
-            # sort topics by score dan return top ones
+            # sort topics by score
             sorted_topics = sorted(topic_scores.items(), key=lambda x: x[1], reverse=True)
             
             for topic, score in sorted_topics[:3]:
                 if score > 0.4 and topic not in topics:
                     topics.append(topic)
             
-            # fallback: kalau kurang topics, tambah berdasarkan category
+            # fallback topics kalau kurang
             if len(topics) < 3:
                 category_topics = {
                     'keahlian': ['Keahlian Python', 'Web Development', 'Data Science'],
@@ -297,7 +268,6 @@ class SimpleRAGSystem:
                     'musik': ['Music Preferences', 'Coding Playlist', 'Nostalgic Songs']
                 }
                 
-                # detect query category
                 query_lower = query.lower()
                 for category, fallback_topics in category_topics.items():
                     if any(keyword in query_lower for keyword in [category, category.replace('_', ' ')]):
@@ -312,7 +282,6 @@ class SimpleRAGSystem:
             logger.error(f"❌ error suggesting topics: {e}")
             return []
 
-# utility functions dengan enhanced functionality
 def load_knowledge_from_file(file_path: str) -> List[Dict]:
     """load knowledge dari json file dengan validation"""
     try:
@@ -337,13 +306,13 @@ def load_knowledge_from_file(file_path: str) -> List[Dict]:
         return []
 
 def initialize_rag_system(knowledge_data: List[Dict] = None, use_openai: bool = False) -> Optional[SimpleRAGSystem]:
-    """initialize enhanced simple rag system"""
+    """initialize simple rag system"""
     try:
         rag = SimpleRAGSystem()
         
         if knowledge_data:
             if rag.load_knowledge_base(knowledge_data):
-                logger.info("✅ enhanced simple rag system initialized successfully")
+                logger.info("✅ simple rag system initialized successfully")
                 return rag
             else:
                 logger.error("❌ failed to load knowledge base")
@@ -353,5 +322,5 @@ def initialize_rag_system(knowledge_data: List[Dict] = None, use_openai: bool = 
             return rag
             
     except Exception as e:
-        logger.error(f"❌ error initializing enhanced rag: {e}")
+        logger.error(f"❌ error initializing rag: {e}")
         return None

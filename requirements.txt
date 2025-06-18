@@ -1,0 +1,27 @@
+# fastapi dan server dependencies
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+python-multipart>=0.0.5
+
+# pydantic untuk validation
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# environment dan config
+python-dotenv>=1.0.0
+
+# ai integration - gemini sebagai primary, openai sebagai fallback
+google-generativeai>=0.8.0
+openai>=1.0.0
+
+# supabase untuk database storage
+supabase>=2.3.0
+
+# http client untuk api calls
+httpx>=0.24.0,<0.25.0
+
+# caching utilities
+cachetools>=5.0.0
+
+# utilities
+python-dateutil>=2.8.0
